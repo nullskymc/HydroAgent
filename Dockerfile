@@ -21,7 +21,6 @@ RUN pip install --upgrade pip \
 
 # 复制应用程序代码
 COPY src/ /app/src/
-COPY config.yaml /app/
 
 # 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \

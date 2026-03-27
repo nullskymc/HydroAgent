@@ -1,0 +1,33 @@
+# config.template.yaml 示例
+
+openai_api_key: sk-xxx-your-openai-key
+openai_base_url: https://your-openai-base-url/v1
+model_name: gpt-4o  # 指定用于LangChain智能体的模型名
+
+# API配置
+apis:
+  weather_api_key: "your-amap-api-key"  # 替换为您申请的高德地图API密钥
+  weather_service_url: "https://restapi.amap.com/v3/weather/weatherInfo"  # 高德地图天气API地址
+
+# 数据库配置
+# database:
+#   host: localhost
+#   port: 5432
+#   name: irrigation_db
+#   user: postgres
+#   password: postgres
+#   type: postgresql
+
+# 采集与策略
+# sensors:
+#   ids: [sensor_001, sensor_002]
+#   collection_interval_minutes: 5
+# irrigation_strategy:
+#   soil_moisture_threshold: 30.0
+#   default_duration_minutes: 30
+# alarm:
+#   soil_moisture_threshold: 25.0
+#   enabled: true
+# logging:
+#   level: INFO
+#   file: irrigation_system.log

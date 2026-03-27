@@ -24,10 +24,6 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      - name: Create config.yaml from secret
-        run: |
-          echo "${{ secrets.CONFIG_YAML }}" > config.yaml
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:

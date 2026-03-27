@@ -12,3 +12,4 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml

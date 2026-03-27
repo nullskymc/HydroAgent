@@ -6,8 +6,6 @@ __pycache__/
 # C extensions
 *.so
 
-config.yaml
-
 # Distribution / packaging
 .Python
 build/
@@ -175,3 +173,10 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 test_report.txt
+
+config.yaml
+
+#Node
+*/node_modules
+*/dist
+*.db

@@ -35,7 +35,7 @@ class Config:
         self.DB_NAME = os.getenv('DB_NAME') or self._config_from_yaml.get('database', {}).get('name', 'irrigation_db')
         self.DB_USER = os.getenv('DB_USER') or self._config_from_yaml.get('database', {}).get('user', 'postgres')
         self.DB_PASSWORD = os.getenv('DB_PASSWORD') or self._config_from_yaml.get('database', {}).get('password', 'postgres')
-        self.DB_TYPE = os.getenv('DB_TYPE') or self._config_from_yaml.get('database', {}).get('type', 'postgresql')
+        self.DB_TYPE = os.getenv('DB_TYPE') or self._config_from_yaml.get('database', {}).get('type', 'sqlite')
         
         # API密钥
         self.WEATHER_API_KEY = os.getenv("WEATHER_API_KEY") or self._get_from_yaml("apis.weather_api_key", "")
@@ -60,6 +60,8 @@ class Config:
         self.MODEL_PATH = os.getenv("MODEL_PATH") or self._get_from_yaml("ml_model.path", None)
         self.MODEL_INPUT_SIZE = int(os.getenv("MODEL_INPUT_SIZE") or self._get_from_yaml("ml_model.input_size", 6))
         self.MODEL_HIDDEN_SIZE = int(os.getenv("MODEL_HIDDEN_SIZE") or self._get_from_yaml("ml_model.hidden_size", 50))
+        # 新增：模型名称配置
+        self.MODEL_NAME = self._config_from_yaml.get('model_name') or os.getenv('MODEL_NAME') or 'gpt-4o'
         
         # 报警配置
         self.ALARM_THRESHOLD_SOIL_MOISTURE = float(os.getenv("ALARM_THRESHOLD") or self._get_from_yaml(
@@ -78,6 +80,15 @@ class Config:
         self.OPENAI_BASE_URL = (
             self._config_from_yaml.get('openai_base_url')
             or os.getenv('OPENAI_BASE_URL')
+        )
+        
+        # FastAPI 服务配置
+        self.APP_HOST = os.getenv('APP_HOST') or self._get_from_yaml('app.host', '0.0.0.0')
+        self.APP_PORT = int(os.getenv('APP_PORT') or self._get_from_yaml('app.port', 7860))
+        
+        # MCP Server 路径
+        self.MCP_SERVER_PATH = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '../mcp_server.py'
         )
     
     def _get_from_yaml(self, path, default=None):
@@ -98,15 +109,20 @@ class Config:
     
     def get_db_uri(self):
         """
-        返回数据库连接URI字符串
+        返回数据库连接URI字符串。
+        根据 DB_TYPE 动态生成，支持 sqlite (默认), mysql, postgresql。
         """
-        if self.DB_TYPE.lower() == "postgresql":
+        db_type = self.DB_TYPE.lower()
+        if db_type == "postgresql":
             return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-        elif self.DB_TYPE.lower() == "mysql":
+        elif db_type == "mysql":
             return f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         else:
-            # 默认SQLite
-            return f"sqlite:///irrigation_system.db"
+            # 默认 SQLite —— 零配置启动
+            db_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), f'../../{self.DB_NAME}.db'
+            )
+            return f"sqlite:///{os.path.abspath(db_path)}"
 
 # 全局配置实例 - 单例模式
 config = Config()
