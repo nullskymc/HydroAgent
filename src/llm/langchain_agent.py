@@ -248,10 +248,24 @@ class HydroLangChainAgent:
             accumulated_text = ""
             
             # 判断 agent 类型
+            is_agent_executor = type(self._agent).__name__ == "AgentExecutor"
+            
             if hasattr(self._agent, 'astream_events'):
-                # LangGraph create_react_agent — 使用 astream_events
+                # 根据不同 agent 类型组装正确的输入荷载
+                if is_agent_executor:
+                    last_user = messages[-1]["content"] if messages else ""
+                    history_msgs = []
+                    for m in messages[:-1]:
+                        if m["role"] == "user":
+                            history_msgs.append(HumanMessage(content=m["content"]))
+                        elif m["role"] == "assistant":
+                            history_msgs.append(AIMessage(content=m["content"]))
+                    input_data = {"input": last_user, "chat_history": history_msgs}
+                else:
+                    input_data = {"messages": lc_messages}
+
                 async for event in self._agent.astream_events(
-                    {"messages": lc_messages}, version="v2"
+                    input_data, version="v2"
                 ):
                     kind = event.get("event", "")
                     
@@ -274,20 +288,20 @@ class HydroLangChainAgent:
                         yield {"type": "tool_result", "tool": tool_name, "result": tool_output[:500]}
             
             elif hasattr(self._agent, 'ainvoke'):
-                # AgentExecutor 降级 — 非流式，一次性返回
-                last_user = messages[-1]["content"] if messages else ""
-                history_msgs = []
-                for m in messages[:-1]:
-                    if m["role"] == "user":
-                        history_msgs.append(HumanMessage(content=m["content"]))
-                    elif m["role"] == "assistant":
-                        history_msgs.append(AIMessage(content=m["content"]))
-                
-                result = await self._agent.ainvoke({
-                    "input": last_user,
-                    "chat_history": history_msgs
-                })
-                output = result.get("output", str(result))
+                # 全量回退（极少数情况下无 stream_events）
+                if is_agent_executor:
+                    last_user = messages[-1]["content"] if messages else ""
+                    history_msgs = []
+                    for m in messages[:-1]:
+                        if m["role"] == "user":
+                            history_msgs.append(HumanMessage(content=m["content"]))
+                        elif m["role"] == "assistant":
+                            history_msgs.append(AIMessage(content=m["content"]))
+                    result = await self._agent.ainvoke({"input": last_user, "chat_history": history_msgs})
+                    output = result.get("output", str(result))
+                else:
+                    result = await self._agent.ainvoke({"messages": lc_messages})
+                    output = str(result)
                 yield {"type": "text", "content": output}
             
             yield {"type": "done"}

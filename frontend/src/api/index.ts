@@ -49,7 +49,7 @@ async function apiPut<T = any>(path: string, body: Record<string, any> = {}): Pr
 //  SSE Chat Stream
 // ============================================================
 
-interface StreamCallbacks {
+export interface StreamCallbacks {
   onText?: (text: string) => void;
   onToolCall?: (tool: string, args: Record<string, any>) => void;
   onToolResult?: (tool: string, result: any) => void;
