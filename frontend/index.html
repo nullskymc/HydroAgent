@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HydroAgent — 水利灌溉智能体</title>
+  <meta name="description" content="基于 Deep Agent + MCP 协议的水利灌溉智能决策平台" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/navbar.css" />
+</head>
+<body>
+  <!-- Navigation Bar -->
+  <nav id="navbar" class="navbar">
+    <div class="navbar-brand">
+      <div class="brand-icon">🌊</div>
+      <div class="brand-text">
+        <span class="brand-name">HydroAgent</span>
+        <span class="brand-sub">水利灌溉智能体</span>
+      </div>
+    </div>
+    <div class="navbar-links">
+      <a href="#/dashboard" class="nav-link" data-page="dashboard">
+        <span class="nav-icon">📊</span><span>监控大屏</span>
+      </a>
+      <a href="#/agent" class="nav-link" data-page="agent">
+        <span class="nav-icon">🤖</span><span>智能体</span>
+      </a>
+      <a href="#/history" class="nav-link" data-page="history">
+        <span class="nav-icon">📋</span><span>决策日志</span>
+      </a>
+      <a href="#/settings" class="nav-link" data-page="settings">
+        <span class="nav-icon">⚙️</span><span>设置</span>
+      </a>
+    </div>
+    <div class="navbar-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span class="status-text" id="status-text">连接中...</span>
+      <span class="status-time" id="status-time"></span>
+    </div>
+  </nav>
+
+  <!-- Page Container -->
+  <main id="app" class="app-container"></main>
+
+  <!-- ==================== PAGE TEMPLATES ==================== -->
+
+  <!-- Dashboard -->
+  <template id="tpl-dashboard">
+    <div class="page page-dashboard">
+      <div class="page-header">
+        <h1>实时监控大屏</h1>
+        <div class="refresh-info">
+          <span class="refresh-badge">🔄 每5秒自动更新</span>
+          <span id="last-update">--</span>
+        </div>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-card" id="kpi-moisture">
+          <div class="kpi-icon">💧</div>
+          <div class="kpi-body">
+            <div class="kpi-label">土壤湿度</div>
+            <div class="kpi-value" id="val-moisture">--</div>
+            <div class="kpi-unit">%</div>
+          </div>
+          <div class="kpi-trend" id="trend-moisture">--</div>
+          <div class="kpi-status" id="status-moisture">加载中...</div>
+        </div>
+        <div class="kpi-card" id="kpi-temp">
+          <div class="kpi-icon">🌡️</div>
+          <div class="kpi-body">
+            <div class="kpi-label">环境温度</div>
+            <div class="kpi-value" id="val-temp">--</div>
+            <div class="kpi-unit">°C</div>
+          </div>
+          <div class="kpi-trend" id="trend-temp">--</div>
+          <div class="kpi-status" id="status-temp">加载中...</div>
+        </div>
+        <div class="kpi-card" id="kpi-light">
+          <div class="kpi-icon">☀️</div>
+          <div class="kpi-body">
+            <div class="kpi-label">光照强度</div>
+            <div class="kpi-value" id="val-light">--</div>
+            <div class="kpi-unit">lux</div>
+          </div>
+          <div class="kpi-trend" id="trend-light">--</div>
+          <div class="kpi-status" id="status-light">加载中...</div>
+        </div>
+        <div class="kpi-card" id="kpi-rain">
+          <div class="kpi-icon">🌧️</div>
+          <div class="kpi-body">
+            <div class="kpi-label">降雨量</div>
+            <div class="kpi-value" id="val-rain">--</div>
+            <div class="kpi-unit">mm/h</div>
+          </div>
+          <div class="kpi-trend" id="trend-rain">--</div>
+          <div class="kpi-status" id="status-rain">加载中...</div>
+        </div>
+      </div>
+      <div class="dashboard-row">
+        <div class="chart-card">
+          <div class="card-header">
+            <h3>传感器数据趋势</h3>
+            <div class="time-tabs">
+              <button class="time-tab active" data-hours="6">6h</button>
+              <button class="time-tab" data-hours="24">24h</button>
+              <button class="time-tab" data-hours="72">3d</button>
+              <button class="time-tab" data-hours="168">7d</button>
+            </div>
+          </div>
+          <div id="sensor-chart" class="chart-container"></div>
+        </div>
+        <div class="right-panel">
+          <div class="device-card">
+            <div class="card-header">
+              <h3>🚿 灌溉设备</h3>
+              <div class="device-status-badge" id="device-badge">已停止</div>
+            </div>
+            <div class="device-info">
+              <div class="device-row"><span>设备状态</span><span class="device-value" id="device-status">停止</span></div>
+              <div class="device-row" id="device-elapsed-row" style="display:none"><span>已运行</span><span class="device-value" id="device-elapsed">--</span></div>
+              <div class="device-row" id="device-remain-row" style="display:none"><span>剩余时间</span><span class="device-value" id="device-remain">--</span></div>
+            </div>
+            <div class="device-controls">
+              <button class="btn btn-success" id="btn-start-irrigation" onclick="window._startIrrigation()">▶ 启动灌溉</button>
+              <button class="btn btn-danger" id="btn-stop-irrigation" onclick="window._stopIrrigation()">⏹ 停止灌溉</button>
+            </div>
+          </div>
+          <div class="weather-card">
+            <div class="card-header"><h3>☁️ 天气预报</h3></div>
+            <div id="weather-content"><div class="weather-loading">加载中...</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="quick-links">
+        <h3>⚡ 快速操作</h3>
+        <div class="quick-link-grid">
+          <a href="#/agent" class="quick-link-card"><span>🤖</span><span>问问智能体</span></a>
+          <div class="quick-link-card" onclick="window._askAnalysis()"><span>📊</span><span>AI 数据分析</span></div>
+          <a href="#/history" class="quick-link-card"><span>📋</span><span>查看决策</span></a>
+          <div class="quick-link-card" onclick="window._askForecast()"><span>📈</span><span>湿度预测</span></div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Agent Chat -->
+  <template id="tpl-agent">
+    <div class="page page-agent">
+      <aside class="chat-sidebar">
+        <div class="sidebar-header">
+          <h3>对话历史</h3>
+          <button class="btn btn-primary btn-sm" id="btn-new-conversation">+ 新建对话</button>
+        </div>
+        <div class="conversation-list" id="conversation-list"><div class="conv-loading">加载中...</div></div>
+        <div class="sidebar-footer">
+          <div class="quick-cmds">
+            <div class="qcmd-label">快捷指令</div>
+            <button class="qcmd" data-msg="查看当前传感器数据和设备状态">查看状态</button>
+            <button class="qcmd" data-msg="分析最近24小时的土壤湿度数据，判断是否需要灌溉">数据分析</button>
+            <button class="qcmd" data-msg="预测未来12小时土壤湿度变化趋势">湿度预测</button>
+            <button class="qcmd" data-msg="启动灌溉30分钟">启动灌溉</button>
+            <button class="qcmd" data-msg="停止灌溉">停止灌溉</button>
+            <button class="qcmd" data-msg="检查各传感器数据异常情况">异常检测</button>
+          </div>
+        </div>
+      </aside>
+      <div class="chat-main">
+        <div class="chat-header">
+          <div class="chat-header-info">
+            <h2 id="chat-title">HydroAgent 智能助手</h2>
+            <span class="chat-subtitle">水利灌溉决策 · 数据分析 · 多轮对话</span>
+          </div>
+          <div class="chat-header-actions">
+            <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="清空当前会话">🗑️</button>
+          </div>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <div class="welcome-message">
+            <div class="welcome-icon">🌊</div>
+            <h3>你好，我是 HydroAgent</h3>
+            <p>你的水利灌溉 AI 智能助手</p>
+            <p>我可以帮你：查询传感器数据、分析灌溉需求、控制灌溉设备、预测土壤湿度变化</p>
+            <div class="welcome-tips"><span class="tip">💡 试试：「分析当前土壤湿度，需要灌溉吗？」</span></div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <div class="quick-prompts" id="quick-prompts">
+            <button class="qprompt" data-msg="查看当前传感器数据">查看传感器</button>
+            <button class="qprompt" data-msg="查询北京天气预报">天气预报</button>
+            <button class="qprompt" data-msg="分析过去24小时土壤湿度趋势">湿度分析</button>
+            <button class="qprompt" data-msg="预测未来土壤湿度变化">湿度预测</button>
+            <button class="qprompt" data-msg="检查数据异常">异常检测</button>
+          </div>
+          <div class="input-row">
+            <textarea id="chat-input" class="chat-input" placeholder="输入消息，与 HydroAgent 对话... (Shift+Enter 换行，Enter 发送)" rows="1"></textarea>
+            <button class="btn btn-primary send-btn" id="btn-send"><span>发送</span><span class="send-icon">➤</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- History -->
+  <template id="tpl-history">
+    <div class="page page-history">
+      <div class="page-header">
+        <h1>📋 决策审计日志</h1>
+        <div class="filter-row">
+          <select id="history-filter" class="filter-select">
+            <option value="decisions">Agent 决策记录</option>
+            <option value="irrigation">灌溉操作记录</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="window._refreshHistory()">🔄 刷新</button>
+        </div>
+      </div>
+      <div class="history-stats" id="history-stats">
+        <div class="stat-card"><div class="stat-value" id="stat-total">--</div><div class="stat-label">总决策次数</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-auto">--</div><div class="stat-label">自动检查</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-manual">--</div><div class="stat-label">手动操作</div></div>
+      </div>
+      <div class="decision-list" id="decision-list"><div class="loading-state">加载中...</div></div>
+    </div>
+  </template>
+
+  <!-- Settings -->
+  <template id="tpl-settings">
+    <div class="page page-settings">
+      <div class="page-header"><h1>⚙️ 系统设置</h1></div>
+      <div class="settings-grid">
+        <div class="settings-card">
+          <h3>🌱 灌溉策略</h3>
+          <div class="setting-item">
+            <label>土壤湿度启动阈值</label>
+            <div class="setting-control"><input type="range" id="threshold-moisture" min="10" max="70" value="40" step="1" /><span class="setting-val" id="val-threshold-moisture">40%</span></div>
+            <p class="setting-hint">低于此值时建议启动灌溉</p>
+          </div>
+          <div class="setting-item">
+            <label>默认灌溉时长</label>
+            <div class="setting-control"><input type="range" id="threshold-duration" min="10" max="120" value="30" step="5" /><span class="setting-val" id="val-threshold-duration">30 分钟</span></div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <h3>🔔 报警配置</h3>
+          <div class="setting-item">
+            <label>报警湿度阈值</label>
+            <div class="setting-control"><input type="range" id="threshold-alarm" min="5" max="40" value="25" step="1" /><span class="setting-val" id="val-threshold-alarm">25%</span></div>
+            <p class="setting-hint">低于此值时触发紧急报警</p>
+          </div>
+          <div class="setting-item">
+            <label>报警开关</label>
+            <div class="setting-control">
+              <label class="toggle"><input type="checkbox" id="toggle-alarm" checked /><span class="toggle-slider"></span></label>
+              <span id="alarm-status-text">已启用</span>
+            </div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <h3>📡 传感器配置</h3>
+          <div class="setting-item">
+            <label>系统信息</label>
+            <div class="info-grid" id="system-info">
+              <div class="info-row"><span>模型</span><span id="info-model">--</span></div>
+              <div class="info-row"><span>数据库</span><span id="info-db">--</span></div>
+              <div class="info-row"><span>传感器</span><span id="info-sensors">--</span></div>
+              <div class="info-row"><span>版本</span><span>v4.0.0</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-card settings-card-about">
+          <h3>🎓 学术说明</h3>
+          <p>HydroAgent 基于以下学术研究构建：</p>
+          <ul>
+            <li>Autonomous Deep Agent (arXiv 2025)</li>
+            <li>Model Context Protocol (Anthropic 2024)</li>
+            <li>LangChain Deep Agents (2025)</li>
+          </ul>
+          <div class="architecture-badge">
+            <span>PRE Loop</span><span>MCP Protocol</span><span>Multi-turn</span><span>Reflection</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button class="btn btn-primary" id="btn-save-settings">💾 保存设置</button>
+        <span class="save-status" id="save-status"></span>
+      </div>
+    </div>
+  </template>
+
+  <script type="module" src="/src/app.ts"></script>
+</body>
+</html>

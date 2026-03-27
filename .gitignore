@@ -175,3 +175,8 @@ cython_debug/
 test_report.txt
 
 config.yaml
+
+#Node
+frontend/node_modules
+frontend/dist
+irrigation_db.db

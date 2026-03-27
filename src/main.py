@@ -1,157 +1,179 @@
 """
-主程序入口 - 初始化和启动智能灌溉系统
+HydroAgent 主入口 — FastAPI 服务器
+启动后端 API 服务并 serve 前端静态文件
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# 获取当前脚本运行目录
-current_dir = os.getcwd()
-
-# 将当前目录加入到 sys.path
-sys.path.append(current_dir)
-
-
+import logging
+import asyncio
+import schedule
 import threading
 import time
-import schedule
-from datetime import datetime
-import argparse
 
-# 导入自定义模块
-from logger_config import logger
-from config import config
-from data.data_collection import DataCollectionModule
-from data.data_processing import DataProcessingModule
-from ml.ml_model import SoilMoisturePredictor
-from llm.llm_agent import LLMAgentModule
-from control.control_execution import ControlExecutionModule
-from alarm.alarm import AlarmModule
-from ui.ui import UserInterfaceModule
-from database.models import init_db
+# 确保 src 包可被导入
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-def automated_irrigation_check(data_collector, data_processor, llm_agent, control_executor):
-    """
-    自动灌溉检查任务，定期运行
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.logger_config import logger
+from src.config import config
+from src.database.models import init_db
+from src.api import router as api_router
+
+# ============================================================
+#  FastAPI 应用配置
+# ============================================================
+
+app = FastAPI(
+    title="HydroAgent — 水利灌溉智能体",
+    description="基于 Deep Agent + MCP 协议的水利灌溉智能决策平台",
+    version="4.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+)
+
+# CORS —— 允许前端开发模式下的跨域请求
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 注册 API 路由
+app.include_router(api_router, prefix="/api")
+
+
+# ============================================================
+#  生命周期事件
+# ============================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """服务启动时：初始化数据库 + 预热 Agent"""
+    logger.info("=" * 60)
+    logger.info("🌊 HydroAgent v4.0.0 启动中...")
     
-    :param data_collector: 数据采集模块实例
-    :param data_processor: 数据处理模块实例
-    :param llm_agent: LLM智能体实例
-    :param control_executor: 控制执行模块实例
-    """
-    logger.info("运行自动灌溉检查...")
+    # 初始化数据库（自动建表）
     try:
-        # 采集当前数据
-        sensor_data = data_collector.get_data()
-        if not sensor_data:
-            logger.warning("自动检查未能获取传感器数据")
-            return
-        
-        # 处理数据并获取天气信息
-        combined_data = data_processor.process_and_get_weather(sensor_data)
-        if not combined_data.get("sensor_data"):
-            logger.warning("自动检查未能处理传感器数据")
-            return
-        
-        # 获取当前湿度
-        current_humidity = combined_data["sensor_data"].get("data", {}).get("soil_moisture")
-        if current_humidity is None:
-            logger.warning("自动检查未能获取当前湿度值")
-            return
-        
-        # 预测未来湿度
-        try:
-            predicted_humidity = llm_agent.predict_humidity(combined_data)
-            logger.info(f"当前湿度: {current_humidity}%，预测湿度: {predicted_humidity}%")
-        except Exception as e:
-            logger.warning(f"湿度预测失败: {e}")
-            predicted_humidity = None
-        
-        # 基于当前数据和预测做决策
-        decision = llm_agent.make_decision(current_humidity, predicted_humidity)
-        
-        # 执行灌溉控制
-        if decision.get("control_command") == "start_irrigation" and control_executor.get_status().get("device_status") != "running":
-            logger.info(f"自动启动灌溉，原因: {decision.get('reason')}")
-            control_executor.start_irrigation()
-        elif decision.get("control_command") == "no_action" and control_executor.get_status().get("device_status") == "running":
-            # 如果当前正在灌溉，但决策是不需要灌溉，则停止
-            # 实际应用中，可能需要更复杂的逻辑，如检查已灌溉时长等
-            logger.info("湿度已满足条件，停止灌溉")
-            control_executor.stop_irrigation()
-        
-    except Exception as e:
-        logger.error(f"自动灌溉检查过程中发生错误: {e}", exc_info=True)
-
-def run_scheduler():
-    """运行调度器，周期执行定时任务"""
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
-def main():
-    """主函数：初始化所有模块并启动应用"""
-    parser = argparse.ArgumentParser(description="智能灌溉系统")
-    parser.add_argument("--init-db", action="store_true", help="初始化数据库")
-    parser.add_argument("--config", type=str, help="配置文件路径")
-    parser.add_argument("--no-ui", action="store_true", help="不启动UI界面")
-    parser.add_argument("--share", action="store_true", help="生成可分享的Gradio链接")
-    args = parser.parse_args()
-    
-    logger.info("启动智能灌溉系统...")
-    
-    # 如果指定了配置文件，重新加载配置
-    if args.config:
-        from config.config import Config
-        global config
-        config = Config(args.config)
-    
-    # 创建必要的目录
-    log_dir = os.path.dirname(config.LOG_FILE)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-    
-    # 初始化数据库（如果指定）
-    if args.init_db:
-        logger.info("初始化数据库...")
         init_db()
+        logger.info(f"✅ 数据库初始化完成 ({config.DB_TYPE})")
+    except Exception as e:
+        logger.error(f"❌ 数据库初始化失败: {e}")
     
-    # 1. 初始化各个模块
-    logger.info("初始化模块...")
-    data_collector = DataCollectionModule()
-    data_processor = DataProcessingModule()
-    ml_predictor = SoilMoisturePredictor()
-    alarm_module = AlarmModule()
-    control_executor = ControlExecutionModule()
-    llm_agent = LLMAgentModule(alarm_module=alarm_module)
-    ui_module = UserInterfaceModule(llm_agent, control_executor, data_collector, data_processor)
-    
-    # 2. 设置定时任务
-    collection_interval = config.DATA_COLLECTION_INTERVAL_MINUTES
-    schedule.every(collection_interval).minutes.do(
-        automated_irrigation_check,
-        data_collector, data_processor, llm_agent, control_executor
-    )
-    logger.info(f"已设置自动灌溉检查，每{collection_interval}分钟运行一次")
-    
-    # 启动调度器线程
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-    
-    # 3. 启动用户界面
-    if not args.no_ui:
-        logger.info("启动用户界面...")
-        ui_module.launch(share=args.share)
-    else:
-        logger.info("未启动用户界面，系统以后台模式运行")
-        # 保持主线程运行
+    # 异步预热 Agent（非阻塞）
+    async def _warmup():
         try:
-            while True:
-                time.sleep(60)
-                logger.debug(f"系统运行中... {datetime.now()}")
-        except KeyboardInterrupt:
-            logger.info("接收到停止信号，系统关闭")
+            from src.llm.langchain_agent import get_hydro_agent
+            agent = get_hydro_agent()
+            await agent.initialize()
+            logger.info("✅ HydroAgent 预热完成")
+        except Exception as e:
+            logger.warning(f"⚠️ HydroAgent 预热失败（将在首次请求时重试）: {e}")
     
-    logger.info("智能灌溉系统已关闭")
+    asyncio.create_task(_warmup())
+    
+    # 启动定时自动检查任务
+    _start_auto_check_scheduler()
+    
+    logger.info(f"✅ HydroAgent 服务已启动: http://{config.APP_HOST}:{config.APP_PORT}")
+    logger.info("=" * 60)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """服务关闭时：清理资源"""
+    logger.info("🛑 HydroAgent 关闭中...")
+    try:
+        from src.llm.langchain_agent import get_hydro_agent
+        agent = get_hydro_agent()
+        await agent.cleanup()
+    except Exception:
+        pass
+    logger.info("👋 HydroAgent 已关闭")
+
+
+# ============================================================
+#  定时自动检查任务
+# ============================================================
+
+def _run_auto_check():
+    """在独立线程中运行异步的自动灌溉检查"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        from src.llm.langchain_agent import get_hydro_agent
+        agent = get_hydro_agent()
+        
+        result = loop.run_until_complete(agent.auto_check())
+        logger.info(f"[AutoCheck] 完成: {result[:100]}...")
+        loop.close()
+    except Exception as e:
+        logger.error(f"[AutoCheck] 失败: {e}")
+
+
+def _start_auto_check_scheduler():
+    """启动定时任务调度器（每小时检查一次）"""
+    interval_minutes = config.DATA_COLLECTION_INTERVAL_MINUTES
+    
+    def scheduler_thread():
+        schedule.every(interval_minutes).minutes.do(_run_auto_check)
+        logger.info(f"📅 自动灌溉检查已启动（每 {interval_minutes} 分钟）")
+        while True:
+            schedule.run_pending()
+            time.sleep(30)
+    
+    t = threading.Thread(target=scheduler_thread, daemon=True)
+    t.start()
+
+
+# ============================================================
+#  前端静态文件 Serve（生产模式）
+# ============================================================
+
+frontend_dist = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '../frontend/dist'
+)
+
+if os.path.exists(frontend_dist):
+    # 生产模式：serve 构建后的 Vite 静态文件
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    logger.info(f"✅ 前端静态文件已挂载: {frontend_dist}")
+else:
+    # 开发模式提示
+    @app.get("/")
+    async def index():
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse("""
+        <html>
+        <head><title>HydroAgent</title></head>
+        <body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding:50px">
+            <h1>🌊 HydroAgent v4.0.0</h1>
+            <p>后端 API 已启动</p>
+            <p>前端开发模式：运行 <code>cd frontend && npm run dev</code></p>
+            <p><a href="/api/docs" style="color:#38bdf8">📖 API 文档</a></p>
+            <p><a href="/api/status" style="color:#38bdf8">📊 系统状态</a></p>
+        </body>
+        </html>
+        """)
+
+
+# ============================================================
+#  入口
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run(
+        "src.main:app",
+        host=config.APP_HOST,
+        port=config.APP_PORT,
+        reload=False,
+        log_level="info",
+    )

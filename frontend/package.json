@@ -1,0 +1,19 @@
+{
+  "name": "hydroagent-frontend",
+  "version": "4.0.0",
+  "description": "HydroAgent 水利灌溉智能体前端",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "echarts": "^5.5.0",
+    "marked": "^12.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "vite": "^5.2.0"
+  }
+}
