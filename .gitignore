@@ -180,3 +180,4 @@ config.yaml
 */node_modules
 */dist
 *.db
+.codex/
