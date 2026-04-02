@@ -1,0 +1,87 @@
+{
+  "zone": {
+    "zone_id": "zone_0d3ed4ad",
+    "name": "分区 1",
+    "location": "北京",
+    "crop_type": "通用作物",
+    "soil_moisture_threshold": 30.0,
+    "default_duration_minutes": 30,
+    "is_enabled": true,
+    "notes": "默认分区，绑定传感器 sensor_001",
+    "sensor_ids": [
+      "sensor_001"
+    ],
+    "actuators": [
+      {
+        "actuator_id": "act_4924c57c",
+        "zone_id": "zone_0d3ed4ad",
+        "name": "分区 1 阀门",
+        "actuator_type": "valve",
+        "status": "idle",
+        "capabilities": {
+          "supports_start": true,
+          "supports_stop": true,
+          "max_duration_minutes": 90
+        },
+        "is_enabled": true,
+        "last_command_at": null
+      }
+    ],
+    "created_at": "2026-04-02T03:00:45.707089",
+    "updated_at": "2026-04-02T03:00:45.707096"
+  },
+  "sensor_summary": {
+    "sensor_ids": [
+      "sensor_001"
+    ],
+    "readings": [
+      {
+        "sensor_id": "sensor_001",
+        "soil_moisture": 59.3,
+        "temperature": 9.77,
+        "light_intensity": 811.26,
+        "rainfall": 2.36
+      }
+    ],
+    "average": {
+      "soil_moisture": 59.3,
+      "temperature": 9.77,
+      "light_intensity": 811.26,
+      "rainfall": 2.36
+    },
+    "status": "ok",
+    "timestamp": "2026-04-02T03:00:45.871949"
+  },
+  "weather_summary": {
+    "city": "北京",
+    "forecast_days": [
+      {
+        "date": "2026-04-02",
+        "day_weather": "多云",
+        "day_temp": "24",
+        "night_temp": "16"
+      },
+      {
+        "date": "2026-04-03",
+        "day_weather": "晴",
+        "day_temp": "25",
+        "night_temp": "17"
+      },
+      {
+        "date": "2026-04-04",
+        "day_weather": "小雨",
+        "day_temp": "26",
+        "night_temp": "18"
+      },
+      {
+        "date": "2026-04-05",
+        "day_weather": "多云",
+        "day_temp": "27",
+        "night_temp": "19"
+      }
+    ],
+    "rain_expected": false,
+    "source": "mock"
+  },
+  "current_plan": null
+}

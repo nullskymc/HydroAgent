@@ -152,13 +152,13 @@ class TestDatabaseModels(unittest.TestCase):
         # 验证已删除
         self.assertIsNone(get_item(self.db, SensorData, sensor_data.id))
     
-    @patch('src.database.models.create_engine')
-    def test_init_db_error(self, mock_create_engine):
+    @patch('src.database.models.Base.metadata.create_all')
+    def test_init_db_error(self, mock_create_all):
         """测试数据库初始化错误处理"""
         from src.database.models import init_db
         
         # 模拟创建失败
-        mock_create_engine.side_effect = Exception("Test DB initialization error")
+        mock_create_all.side_effect = Exception("Test DB initialization error")
         
         # 验证异常传递
         with self.assertRaises(DatabaseError):

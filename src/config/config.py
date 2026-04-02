@@ -24,9 +24,10 @@ class Config:
             
         # 优先加载 config.yaml
         config_path = config_file_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../config.yaml')
+        self.CONFIG_PATH = os.path.abspath(config_path)
         self._config_from_yaml = {}
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
+        if os.path.exists(self.CONFIG_PATH):
+            with open(self.CONFIG_PATH, 'r', encoding='utf-8') as f:
                 self._config_from_yaml = yaml.safe_load(f) or {}
         
         # 数据库配置 - 优先从环境变量读取
@@ -66,7 +67,12 @@ class Config:
         # 报警配置
         self.ALARM_THRESHOLD_SOIL_MOISTURE = float(os.getenv("ALARM_THRESHOLD") or self._get_from_yaml(
             "alarm.soil_moisture_threshold", 25.0))
-        self.ALARM_ENABLED = os.getenv("ALARM_ENABLED", "true").lower() == "true" or self._get_from_yaml("alarm.enabled", True)
+        alarm_enabled_env = os.getenv("ALARM_ENABLED")
+        self.ALARM_ENABLED = (
+            alarm_enabled_env.lower() == "true"
+            if alarm_enabled_env is not None
+            else bool(self._get_from_yaml("alarm.enabled", True))
+        )
         
         # 日志配置
         self.LOG_LEVEL = os.getenv("LOG_LEVEL") or self._get_from_yaml("logging.level", "INFO")
@@ -85,6 +91,10 @@ class Config:
         # FastAPI 服务配置
         self.APP_HOST = os.getenv('APP_HOST') or self._get_from_yaml('app.host', '0.0.0.0')
         self.APP_PORT = int(os.getenv('APP_PORT') or self._get_from_yaml('app.port', 7860))
+        self.FRONTEND_ORIGINS = self._parse_origins(
+            os.getenv('FRONTEND_ORIGINS'),
+            self._get_from_yaml('app.frontend_origins', ['http://localhost:3000'])
+        )
         
         # MCP Server 路径
         self.MCP_SERVER_PATH = os.path.join(
@@ -106,6 +116,73 @@ class Config:
             else:
                 return default
         return value
+
+    def _set_in_yaml(self, path, value):
+        """按点路径写入嵌套 YAML 配置。"""
+        keys = path.split('.')
+        target = self._config_from_yaml
+        for key in keys[:-1]:
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            target = target[key]
+        target[keys[-1]] = value
+
+    def _write_yaml(self):
+        """将当前 YAML 配置持久化回 config.yaml。"""
+        with open(self.CONFIG_PATH, 'w', encoding='utf-8') as file:
+            yaml.safe_dump(self._config_from_yaml, file, allow_unicode=True, sort_keys=False)
+
+    def get_runtime_settings(self):
+        """返回前端设置页需要的结构化配置快照。"""
+        return {
+            "soil_moisture_threshold": self.IRRIGATION_STRATEGY.get("soil_moisture_threshold", 40.0),
+            "default_duration_minutes": self.IRRIGATION_STRATEGY.get("default_duration_minutes", 30),
+            "alarm_threshold": self.ALARM_THRESHOLD_SOIL_MOISTURE,
+            "alarm_enabled": self.ALARM_ENABLED,
+            "model_name": self.MODEL_NAME,
+            "sensor_ids": self.SENSOR_IDS,
+            "collection_interval_minutes": self.DATA_COLLECTION_INTERVAL_MINUTES,
+            "db_type": self.DB_TYPE,
+            "config_source": self.CONFIG_PATH,
+        }
+
+    def update_runtime_settings(self, updates):
+        """将前端结构化设置映射回 config.yaml，并同步刷新运行时配置。"""
+        mapping = {
+            "soil_moisture_threshold": ("irrigation_strategy.soil_moisture_threshold", float),
+            "default_duration_minutes": ("irrigation_strategy.default_duration_minutes", int),
+            "alarm_threshold": ("alarm.soil_moisture_threshold", float),
+            "alarm_enabled": ("alarm.enabled", bool),
+            "collection_interval_minutes": ("sensors.collection_interval_minutes", int),
+            "sensor_ids": ("sensors.ids", list),
+            "model_name": ("model_name", str),
+        }
+
+        for key, value in updates.items():
+            if key not in mapping or value is None:
+                continue
+            path, caster = mapping[key]
+            normalized = [item for item in value if item] if key == "sensor_ids" else caster(value)
+            self._set_in_yaml(path, normalized)
+
+        self._write_yaml()
+
+        if "soil_moisture_threshold" in updates and updates["soil_moisture_threshold"] is not None:
+            self.IRRIGATION_STRATEGY["soil_moisture_threshold"] = float(updates["soil_moisture_threshold"])
+        if "default_duration_minutes" in updates and updates["default_duration_minutes"] is not None:
+            self.IRRIGATION_STRATEGY["default_duration_minutes"] = int(updates["default_duration_minutes"])
+        if "alarm_threshold" in updates and updates["alarm_threshold"] is not None:
+            self.ALARM_THRESHOLD_SOIL_MOISTURE = float(updates["alarm_threshold"])
+        if "alarm_enabled" in updates and updates["alarm_enabled"] is not None:
+            self.ALARM_ENABLED = bool(updates["alarm_enabled"])
+        if "collection_interval_minutes" in updates and updates["collection_interval_minutes"] is not None:
+            self.DATA_COLLECTION_INTERVAL_MINUTES = int(updates["collection_interval_minutes"])
+        if "sensor_ids" in updates and updates["sensor_ids"] is not None:
+            self.SENSOR_IDS = [item for item in updates["sensor_ids"] if item]
+        if "model_name" in updates and updates["model_name"] is not None:
+            self.MODEL_NAME = str(updates["model_name"])
+
+        return self.get_runtime_settings()
     
     def get_db_uri(self):
         """
@@ -123,6 +200,14 @@ class Config:
                 os.path.dirname(os.path.abspath(__file__)), f'../../{self.DB_NAME}.db'
             )
             return f"sqlite:///{os.path.abspath(db_path)}"
+
+    def _parse_origins(self, origins, default):
+        """将环境变量或配置中的前端域名解析为列表。"""
+        if isinstance(origins, str):
+            return [origin.strip() for origin in origins.split(',') if origin.strip()]
+        if isinstance(origins, list):
+            return origins
+        return default
 
 # 全局配置实例 - 单例模式
 config = Config()

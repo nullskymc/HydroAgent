@@ -1,308 +1,332 @@
 import { AppShell } from '@/components/app-shell'
+import { ConsoleEmptyState, ConsoleSectionHeader } from '@/components/console-primitives'
 import { DashboardActions } from '@/components/dashboard-actions'
-import { SectionHeader } from '@/components/section-header'
 import { Badge, StatusDot } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { getDashboardData, getSettingsData } from '@/lib/server-data'
+import { DecisionLog, IrrigationPlan, Zone } from '@/lib/types'
 import { formatDateTime, formatNumber } from '@/lib/utils'
 
-type SummaryTone = 'success' | 'danger'
+type Tone = 'default' | 'success' | 'warning' | 'danger'
 
-function clampPercent(value: number, max: number) {
-  return Math.max(0, Math.min(100, (value / max) * 100))
+type ZoneView = {
+  zone: Zone
+  soilMoisture: number
+  threshold: number
+  deficit: number
+  latestPlan?: IrrigationPlan
+  actuator?: Zone['actuators'][number]
+}
+
+function getRiskTone(value?: string | null): Tone {
+  if (value === 'high') return 'danger'
+  if (value === 'medium') return 'warning'
+  if (value === 'low') return 'success'
+  return 'default'
+}
+
+function getStateTone(value?: string | null): Tone {
+  if (value === 'running') return 'warning'
+  if (value === 'idle') return 'success'
+  return 'default'
+}
+
+// 将传感器快照和分区配置对齐，避免渲染层重复处理业务拼装。
+function findZoneReading(zoneId: string, sensorRows: Array<Record<string, unknown>>) {
+  return sensorRows.find((row) => String(row.zone_id || '') === zoneId)
+}
+
+function summarizeDecision(decision: DecisionLog) {
+  const result = decision.decision_result || {}
+  const subagent = typeof result.subagent === 'string' ? result.subagent : null
+  const status = typeof result.status === 'string' ? result.status : null
+  if (subagent && status) {
+    return `${subagent} · ${status}`
+  }
+  return decision.reasoning_chain || JSON.stringify(result)
+}
+
+// 将表格需要的分区视图模型统一在这里生成，保持页面结构和数据逻辑解耦。
+function buildZoneView(zone: Zone, sensorRows: Array<Record<string, unknown>>, plans: IrrigationPlan[]): ZoneView {
+  const reading = findZoneReading(zone.zone_id, sensorRows)
+  const soilMoisture = Number(reading?.soil_moisture || 0)
+  const threshold = zone.soil_moisture_threshold || 40
+  const deficit = Math.max(0, threshold - soilMoisture)
+  const latestPlan = plans.find((plan) => plan.zone_id === zone.zone_id)
+  const actuator = zone.actuators[0]
+
+  return {
+    zone,
+    soilMoisture,
+    threshold,
+    deficit,
+    latestPlan,
+    actuator,
+  }
 }
 
 export default async function DashboardPage() {
   const [dashboard, settings] = await Promise.all([getDashboardData(), getSettingsData().catch(() => null)])
   const sensorRows = (dashboard.sensors?.sensors || []) as Array<Record<string, unknown>>
   const forecastRows = dashboard.weather?.forecast || []
-  const soilMoisture = dashboard.sensors?.average.soil_moisture || 0
-  const temperature = dashboard.sensors?.average.temperature || 0
-  const lightIntensity = dashboard.sensors?.average.light_intensity || 0
-  const rainfall = dashboard.sensors?.average.rainfall || 0
-  const primaryMetrics = [
-    { title: '土壤湿度', value: formatNumber(soilMoisture, '%'), width: clampPercent(soilMoisture, 100) },
-    { title: '环境温度', value: formatNumber(temperature, '°C'), width: clampPercent(temperature, 40) },
-    { title: '光照强度', value: formatNumber(lightIntensity, ' lux'), width: clampPercent(lightIntensity, 1000) },
-    { title: '降雨量', value: formatNumber(rainfall, ' mm'), width: clampPercent(rainfall, 5) },
-  ]
-  const currentMode = dashboard.irrigation?.status === 'running' ? '运行中' : '待命监测'
-  const summaryItems: Array<{ label: string; value: string; tone?: SummaryTone }> = [
-    { label: '系统状态', value: dashboard.backendReachable ? '在线' : '离线', tone: dashboard.backendReachable ? 'success' : 'danger' },
-    { label: '灌溉模式', value: currentMode },
-    { label: '天气', value: dashboard.weather?.live.weather || '--' },
-    { label: '策略记录', value: `${dashboard.decisions.length} 条` },
-    { label: '更新时间', value: formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp) },
-  ]
-  const systemOverview = [
-    ['Agent 就绪', dashboard.status?.agent_initialized ? '已就绪' : '未就绪'],
-    ['模型', settings?.model_name || dashboard.status?.version || '--'],
-    ['采集周期', `${settings?.collection_interval_minutes || '--'} 分钟`],
-    ['报警阈值', `${settings?.alarm_threshold || '--'}%`],
-    ['湿度阈值', `${settings?.soil_moisture_threshold || '--'}%`],
-    ['城市', dashboard.weather?.city || '--'],
+  const pendingPlans = dashboard.plans.filter((item) => item.approval_status === 'pending')
+  const zoneRows = dashboard.zones.map((zone) => buildZoneView(zone, sensorRows, dashboard.plans))
+  const running = dashboard.irrigation?.status === 'running'
+  const backendOnline = dashboard.backendReachable
+  const currentMode = running ? '运行中' : '待命'
+  const averageSoil = dashboard.sensors?.average.soil_moisture ?? null
+  const rainfall = dashboard.sensors?.average.rainfall ?? null
+  const attentionCount = zoneRows.filter((zone) => zone.deficit > 5 || zone.latestPlan?.approval_status === 'pending').length
+  const lastUpdated = formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp)
+  const controlLockedReason = !backendOnline
+    ? '核心离线时，所有灌溉操作保持只读。'
+    : zoneRows.length === 0
+      ? '暂无分区数据，不能执行灌溉。'
+      : null
+
+  const telemetryItems = [
+    {
+      label: '运行总览',
+      value: (
+        <>
+          <StatusDot tone={backendOnline ? 'success' : 'danger'} />
+          {backendOnline ? 'Core Online' : 'Core Offline'}
+        </>
+      ),
+    },
+    { label: '模式', value: currentMode },
+    { label: '平均湿度', value: formatNumber(averageSoil, '%') },
+    { label: '待审批', value: String(pendingPlans.length) },
+    { label: '注意分区', value: String(attentionCount) },
+    { label: '天气', value: `${dashboard.weather?.live.weather || '--'} (${formatNumber(rainfall, 'mm')})` },
   ]
 
   return (
     <AppShell currentPath="/">
-      <div className="page-stack">
-        <div className="dashboard-headline">
-          <div>
-            <p className="eyebrow">智能体中枢</p>
-            <h2>实时运行态</h2>
-            <p className="page-description">围绕灌溉状态、环境数据和执行动作构建的高密度运行工作台。</p>
+      <div className="page-stack console-dashboard">
+        <section className="console-telemetry-bar">
+          <div className="console-telemetry-title">
+            <p className="eyebrow">运行总览</p>
+            <h2>灌溉中枢</h2>
           </div>
-          <div className="dashboard-headline-meta">
-            <Badge tone={dashboard.backendReachable ? 'success' : 'danger'}>
-              <StatusDot tone={dashboard.backendReachable ? 'success' : 'danger'} />
-              {dashboard.backendReachable ? 'Core Online' : 'Core Offline'}
-            </Badge>
-            <Badge>更新时间 {formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp)}</Badge>
+          <div className="console-telemetry-stream">
+            {telemetryItems.map((item) => (
+              <div key={item.label} className="console-telemetry-item">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
           </div>
-        </div>
+          <div className="console-telemetry-meta">
+            <span>城市 {dashboard.weather?.city || '--'}</span>
+            <strong>更新时间 {lastUpdated}</strong>
+          </div>
+        </section>
 
-        <div className="summary-strip">
-          {summaryItems.map((item) => (
-            <div key={item.label} className="summary-cell">
-              <span className="summary-label">{item.label}</span>
-              <div className="summary-value-row">
-                {item.tone ? (
-                  <Badge tone={item.tone}>
-                    <StatusDot tone={item.tone} />
-                    {item.value}
-                  </Badge>
-                ) : (
-                  <strong className="summary-value">{item.value}</strong>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="management-grid">
-          <Card className="control-panel-card">
-            <CardHeader>
-              <div>
-                <p className="eyebrow">管理控制</p>
-                <CardTitle>灌溉执行台</CardTitle>
-                <CardDescription>把执行状态、可操作动作和策略边界放在同一个决策面板中。</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent className="control-panel-content">
-              <div className="control-primary">
-                <div className="control-state-block">
-                  <span className="hero-value-label">当前模式</span>
-                  <strong className="control-state-value">{currentMode}</strong>
-                  <p className="inline-muted">系统根据实时传感器、阈值和天气信息决定是否进入主动灌溉。</p>
-                </div>
-                <div className="control-action-block">
-                  <DashboardActions running={dashboard.irrigation?.status === 'running'} defaultDuration={settings?.default_duration_minutes || 30} />
-                  <div className="hero-action-note">
-                    <Badge tone={settings?.alarm_enabled ? 'success' : 'default'}>告警 {settings?.alarm_enabled ? '启用' : '关闭'}</Badge>
+        <div className="console-stage">
+          <div className="console-main">
+            <section className="console-section console-control-section">
+              <ConsoleSectionHeader
+                eyebrow="控制"
+                title="执行状态"
+                meta={
+                  <>
+                    <Badge tone={settings?.alarm_enabled ? 'success' : 'default'}>
+                      告警 {settings?.alarm_enabled ? '启用' : '关闭'}
+                    </Badge>
                     <Badge>默认 {settings?.default_duration_minutes || '--'} 分钟</Badge>
+                  </>
+                }
+              />
+              <div className="console-control-grid">
+                <div className="console-control-copy">
+                  <div className="console-status-band">
+                    <div className="console-status-item">
+                      <span>模式</span>
+                      <strong>{currentMode}</strong>
+                    </div>
+                    <div className="console-status-item">
+                      <span>执行状态</span>
+                      <strong>{dashboard.irrigation?.status || '--'}</strong>
+                    </div>
+                    <div className="console-status-item">
+                      <span>剩余时长</span>
+                      <strong>{formatNumber(dashboard.irrigation?.remaining_minutes ?? null, ' 分钟')}</strong>
+                    </div>
+                  </div>
+                  <div className="console-policy-strip">
+                    <span>策略边界</span>
+                    <strong>start 必须基于计划</strong>
+                    <p>{controlLockedReason || '系统在线时，启动命令仍需遵循计划与审批边界。'}</p>
+                  </div>
+                </div>
+                <DashboardActions
+                  running={running}
+                  defaultDuration={settings?.default_duration_minutes || 30}
+                  disabled={Boolean(controlLockedReason)}
+                  disabledReason={controlLockedReason}
+                />
+              </div>
+            </section>
+
+            <section className="console-section">
+              <ConsoleSectionHeader
+                eyebrow="分区"
+                title="分区状态"
+                meta={<span className="console-plain-meta">{dashboard.zones.length} 个分区</span>}
+              />
+              <div className="console-table">
+                <div className="console-table-head">
+                  <span>分区名称</span>
+                  <span>湿度</span>
+                  <span>阈值</span>
+                  <span>缺口</span>
+                  <span>执行器</span>
+                </div>
+                {zoneRows.length === 0 ? (
+                  <ConsoleEmptyState title="暂无分区数据" detail="核心未返回分区与传感器信息，表格保持只读占位。" />
+                ) : null}
+                {zoneRows.map((item) => (
+                  <div key={item.zone.zone_id} className="console-table-row">
+                    <div className="console-zone-cell">
+                      <strong>{item.zone.name}</strong>
+                      <p>{item.zone.location}</p>
+                      <em>计划 {item.latestPlan?.approval_status || '无计划'}</em>
+                    </div>
+                    <span>{formatNumber(item.soilMoisture, '%')}</span>
+                    <span>{item.threshold}%</span>
+                    <span>{formatNumber(item.deficit, '%')}</span>
+                    <div className="console-actuator-cell">
+                      <Badge tone={getStateTone(item.actuator?.status)}>{item.actuator?.status || 'unknown'}</Badge>
+                      <p>{item.actuator?.name || '未绑定执行器'}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="console-section">
+              <div className="console-support-grid">
+                <div className="console-support-panel">
+                  <ConsoleSectionHeader eyebrow="天气" title="天气窗口" />
+                  <div className="console-feed">
+                    {forecastRows.length === 0 ? (
+                      <ConsoleEmptyState title="暂无预报" detail="天气服务未返回未来窗口，自动灌溉将保持谨慎。" />
+                    ) : null}
+                    {forecastRows.slice(0, 4).map((forecast) => (
+                      <div key={forecast.date} className="console-feed-row">
+                        <div>
+                          <strong>{forecast.date}</strong>
+                          <p>{forecast.day_weather}</p>
+                        </div>
+                        <span>
+                          {forecast.day_temp}° / {forecast.night_temp}°
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="console-support-panel">
+                  <ConsoleSectionHeader eyebrow="系统" title="系统状态" />
+                  <div className="console-stat-grid">
+                    <div className="console-stat-card">
+                      <span>核心状态</span>
+                      <strong>{backendOnline ? '已连通' : '离线'}</strong>
+                    </div>
+                    <div className="console-stat-card">
+                      <span>采集周期</span>
+                      <strong>{settings?.collection_interval_minutes || '--'} 分钟</strong>
+                    </div>
+                    <div className="console-stat-card">
+                      <span>节点数量</span>
+                      <strong>{sensorRows.length}</strong>
+                    </div>
+                    <div className="console-stat-card">
+                      <span>当前模型</span>
+                      <strong>{settings?.model_name || dashboard.status?.version || '--'}</strong>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div className="control-detail-grid">
-                <div className="control-detail-card">
-                  <span className="summary-label">执行信息</span>
-                  <dl className="ops-detail-list">
-                    <div>
-                      <dt>剩余时长</dt>
-                      <dd>{formatNumber(dashboard.irrigation?.remaining_minutes, ' 分钟')}</dd>
-                    </div>
-                    <div>
-                      <dt>计划时长</dt>
-                      <dd>{formatNumber(dashboard.irrigation?.duration_minutes, ' 分钟')}</dd>
-                    </div>
-                    <div>
-                      <dt>启动时间</dt>
-                      <dd>{dashboard.irrigation?.start_time ? formatDateTime(dashboard.irrigation.start_time) : '--'}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <div className="control-detail-card">
-                  <span className="summary-label">系统约束</span>
-                  <dl className="ops-detail-list">
-                    <div>
-                      <dt>湿度阈值</dt>
-                      <dd>{settings?.soil_moisture_threshold || '--'}%</dd>
-                    </div>
-                    <div>
-                      <dt>报警阈值</dt>
-                      <dd>{settings?.alarm_threshold || '--'}%</dd>
-                    </div>
-                    <div>
-                      <dt>数据源</dt>
-                      <dd>{settings?.db_type || '--'}</dd>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            </section>
+          </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>环境监测概览</CardTitle>
-              <CardDescription>用统一刻度查看当前环境状态，而不是把单个指标拆成独立展示卡。</CardDescription>
-            </CardHeader>
-            <CardContent className="management-metric-list">
-              {primaryMetrics.map((metric) => (
-                <div key={metric.title} className="management-metric-row">
-                  <div className="management-metric-copy">
-                    <span>{metric.title}</span>
-                    <strong>{metric.value}</strong>
+          <aside className="console-sidebar">
+            <section className="console-section">
+              <ConsoleSectionHeader
+                eyebrow="审批"
+                title="待处理计划"
+                meta={<span className="console-plain-meta">高优待办</span>}
+              />
+              <div className="console-feed">
+                {pendingPlans.length === 0 ? (
+                  <ConsoleEmptyState title="当前没有待审批计划" detail="计划队列为空，审批侧栏保持清空状态。" />
+                ) : null}
+                {pendingPlans.map((plan) => (
+                  <div key={plan.plan_id} className="console-feed-row console-feed-row-stack">
+                    <div>
+                      <strong>{plan.zone_name || plan.zone_id}</strong>
+                      <p>{plan.plan_id}</p>
+                    </div>
+                    <div className="console-feed-tags">
+                      <Badge tone={getRiskTone(plan.risk_level)}>{plan.risk_level}</Badge>
+                      <Badge>{plan.proposed_action}</Badge>
+                    </div>
                   </div>
-                  <div className="metric-bar"><span style={{ width: `${metric.width}%` }} /></div>
+                ))}
+              </div>
+            </section>
+
+            <section className="console-section">
+              <ConsoleSectionHeader eyebrow="审计" title="最近决策" />
+              <div className="console-feed">
+                {dashboard.decisions.length === 0 ? (
+                  <ConsoleEmptyState title="暂无决策日志" detail="智能体还没有生成新的决策记录。" />
+                ) : null}
+                {dashboard.decisions.map((decision) => (
+                  <div key={decision.decision_id} className="console-feed-row console-feed-row-tall">
+                    <div>
+                      <strong>{summarizeDecision(decision)}</strong>
+                      <p>{decision.reflection_notes || decision.trigger}</p>
+                    </div>
+                    <span>{formatDateTime(decision.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="console-section">
+              <ConsoleSectionHeader eyebrow="系统" title="系统信息" />
+              <div className="console-info-grid">
+                <div className="console-info-row">
+                  <span>系统模型</span>
+                  <strong>{settings?.model_name || dashboard.status?.version || '--'}</strong>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="board-grid">
-          <Card className="board-card">
-            <CardHeader>
-              <CardTitle>系统概览</CardTitle>
-            </CardHeader>
-            <CardContent className="meta-list">
-              {systemOverview.map(([label, value]) => (
-                <div key={label} className="meta-row">
-                  <span>{label}</span>
-                  <strong>{value}</strong>
+                <div className="console-info-row">
+                  <span>节点数量</span>
+                  <strong>{sensorRows.length}</strong>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="board-card">
-            <CardHeader>
-              <CardTitle>天气与外部条件</CardTitle>
-            </CardHeader>
-            <CardContent className="meta-list">
-              <div className="meta-row">
-                <span>实况天气</span>
-                <strong>{dashboard.weather?.live.weather || '--'}</strong>
+                <div className="console-info-row">
+                  <span>告警阈值</span>
+                  <strong>{settings?.alarm_threshold || '--'}</strong>
+                </div>
+                <div className="console-info-row">
+                  <span>默认阈值</span>
+                  <strong>{settings?.soil_moisture_threshold || '--'}%</strong>
+                </div>
               </div>
-              <div className="meta-row">
-                <span>实时温度</span>
-                <strong>{dashboard.weather?.live.temperature || '--'}°C</strong>
-              </div>
-              <div className="meta-row">
-                <span>风向</span>
-                <strong>{dashboard.weather?.live.wind_direction || '--'}</strong>
-              </div>
-              <div className="meta-row">
-                <span>风力</span>
-                <strong>{dashboard.weather?.live.wind_power || '--'}</strong>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="board-card">
-            <CardHeader>
-              <CardTitle>节点状态</CardTitle>
-            </CardHeader>
-            <CardContent className="meta-list">
-              <div className="meta-row">
-                <span>节点数量</span>
-                <strong>{sensorRows.length}</strong>
-              </div>
-              <div className="meta-row">
-                <span>采样时间</span>
-                <strong>{dashboard.sensors?.timestamp ? formatDateTime(dashboard.sensors.timestamp) : '--'}</strong>
-              </div>
-              <div className="meta-row">
-                <span>异常提示</span>
-                <strong>{dashboard.error || '无'}</strong>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="board-card">
-            <CardHeader>
-              <CardTitle>系统能力</CardTitle>
-            </CardHeader>
-            <CardContent className="tag-list">
-              {(dashboard.status?.features || []).length ? (
-                (dashboard.status?.features || []).map((feature) => (
-                  <span key={feature} className="tag">
+              <div className="console-feature-strip">
+                {(dashboard.status?.features || []).length === 0 ? (
+                  <span className="console-feature-tag console-feature-tag-muted">暂无系统特性数据</span>
+                ) : null}
+                {(dashboard.status?.features || []).map((feature) => (
+                  <span key={feature} className="console-feature-tag">
                     {feature}
                   </span>
-                ))
-              ) : (
-                <p className="inline-muted">暂无能力标记</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <SectionHeader
-          title="运行数据"
-          description="传感器、天气、能力与决策"
-        />
-
-        <div className="board-grid board-grid-operations">
-          <Card className="board-card board-card-wide">
-            <CardHeader>
-              <CardTitle>传感器节点明细</CardTitle>
-              <CardDescription>直接面向管理者展示节点状态，而不是把节点信息埋在装饰卡片里。</CardDescription>
-            </CardHeader>
-            <CardContent className="table-card sensor-list">
-              {sensorRows.length === 0 ? <p className="inline-muted">暂无节点数据</p> : null}
-              {sensorRows.map((sensor, index) => {
-                const sensorId = String(sensor.sensor_id || `sensor_${index + 1}`)
-                const rowKey = `${sensorId}-${index}`
-
-                return (
-                <div key={rowKey} className="table-row sensor-row">
-                  <strong>{sensorId}</strong>
-                  <span>湿度 {formatNumber(Number(sensor.soil_moisture || 0), '%')}</span>
-                  <span>温度 {formatNumber(Number(sensor.temperature || 0), '°C')}</span>
-                  <span>光照 {formatNumber(Number(sensor.light_intensity || 0), ' lux')}</span>
-                </div>
-                )
-              })}
-            </CardContent>
-          </Card>
-
-          <Card className="board-card">
-            <CardHeader>
-              <CardTitle>天气预报</CardTitle>
-              <CardDescription>未来 4 个时段</CardDescription>
-            </CardHeader>
-            <CardContent className="table-card forecast-list">
-              {forecastRows.length === 0 ? <p className="inline-muted">暂无天气预报</p> : null}
-              {forecastRows.map((forecast) => (
-                <div key={forecast.date} className="table-row forecast-row">
-                  <strong>{forecast.date}</strong>
-                  <span>{forecast.day_weather}</span>
-                  <span>{forecast.day_temp}° / {forecast.night_temp}°</span>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="board-card">
-            <CardHeader>
-              <CardTitle>最近决策</CardTitle>
-              <CardDescription>面向管理者保留触发原因、输出摘要和时间点。</CardDescription>
-            </CardHeader>
-            <CardContent className="table-card decision-feed">
-            {dashboard.decisions.length === 0 ? (
-              <p className="inline-muted">暂无决策日志</p>
-            ) : (
-              dashboard.decisions.map((item) => (
-                <div key={item.decision_id} className="table-row">
-                  <strong>{item.trigger}</strong>
-                  <p>{item.decision_result ? JSON.stringify(item.decision_result) : '无结果摘要'}</p>
-                  <time>{formatDateTime(item.created_at)}</time>
-                </div>
-              ))
-            )}
-            </CardContent>
-          </Card>
+                ))}
+              </div>
+            </section>
+          </aside>
         </div>
       </div>
     </AppShell>

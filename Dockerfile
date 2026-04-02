@@ -7,6 +7,7 @@ WORKDIR /app
 # 安装系统依赖和中文字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
     gcc \
     fonts-wqy-microhei \
     && apt-get clean \
@@ -40,7 +41,7 @@ EXPOSE 7860
 
 # 设置健康检查
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:7860/ || exit 1
+    CMD curl -f http://localhost:7860/api/health || exit 1
 
 # 启动应用
 CMD ["python", "/app/src/main.py"]

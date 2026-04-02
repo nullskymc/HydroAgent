@@ -1,0 +1,8 @@
+{
+  "blockers": [],
+  "risk_factors": [
+    "执行器当前已在运行"
+  ],
+  "can_execute": false,
+  "approval_required": false
+}

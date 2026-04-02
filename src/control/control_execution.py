@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 
 from src.logger_config import logger
 from src.config import config
-from exceptions import IrrigationDeviceError
+from src.exceptions.exceptions import IrrigationDeviceError
 
 class ControlExecutionModule:
     """
