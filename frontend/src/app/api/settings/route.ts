@@ -1,18 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { fetchBackend } from '@/lib/backend'
+import { NextRequest } from 'next/server'
+import { proxyJson } from '@/lib/backend-proxy'
 
-export async function GET() {
-  const response = await fetchBackend('/api/settings')
-  return NextResponse.json(await response.json(), { status: response.status })
+export async function GET(request: NextRequest) {
+  return proxyJson(request, '/api/settings')
 }
 
 export async function PUT(request: NextRequest) {
-  const body = await request.text()
-  const response = await fetchBackend('/api/settings', {
-    method: 'PUT',
-    body,
-    headers: { 'Content-Type': 'application/json' },
-  })
-
-  return NextResponse.json(await response.json(), { status: response.status })
+  return proxyJson(request, '/api/settings', { method: 'PUT', body: await request.text() })
 }

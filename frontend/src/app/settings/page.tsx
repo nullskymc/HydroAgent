@@ -1,5 +1,6 @@
 import { AppShell } from '@/components/app-shell'
 import { SettingsForm } from '@/components/settings-form'
+import { requirePermission } from '@/lib/auth'
 import { getSettingsData } from '@/lib/server-data'
 import { RuntimeSettings } from '@/lib/types'
 
@@ -10,6 +11,7 @@ export default async function SettingsPage({
 }: {
   searchParams?: Promise<{ section?: string }>
 }) {
+  await requirePermission('settings:view')
   const settings: RuntimeSettings = await getSettingsData().catch(() => ({
     soil_moisture_threshold: 40,
     default_duration_minutes: 30,

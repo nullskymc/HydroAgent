@@ -1,8 +1,10 @@
 import { AppShell } from '@/components/app-shell'
+import { AnalyticsOverviewPanel } from '@/components/analytics-overview'
 import { ConsoleEmptyState, ConsoleSectionHeader } from '@/components/console-primitives'
 import { DashboardActions } from '@/components/dashboard-actions'
 import { Badge, StatusDot } from '@/components/ui/badge'
-import { getDashboardData, getSettingsData } from '@/lib/server-data'
+import { requirePermission } from '@/lib/auth'
+import { getAnalyticsOverview, getDashboardData, getSettingsData } from '@/lib/server-data'
 import { DecisionLog, IrrigationPlan, Zone } from '@/lib/types'
 import { formatDateTime, formatNumber } from '@/lib/utils'
 
@@ -65,7 +67,12 @@ function buildZoneView(zone: Zone, sensorRows: Array<Record<string, unknown>>, p
 }
 
 export default async function DashboardPage() {
-  const [dashboard, settings] = await Promise.all([getDashboardData(), getSettingsData().catch(() => null)])
+  await requirePermission('dashboard:view')
+  const [dashboard, settings, overview] = await Promise.all([
+    getDashboardData(),
+    getSettingsData().catch(() => null),
+    getAnalyticsOverview('7d').catch(() => null),
+  ])
   const sensorRows = (dashboard.sensors?.sensors || []) as Array<Record<string, unknown>>
   const forecastRows = dashboard.weather?.forecast || []
   const pendingPlans = dashboard.plans.filter((item) => item.approval_status === 'pending')
@@ -249,6 +256,13 @@ export default async function DashboardPage() {
                 </div>
               </div>
             </section>
+
+            {overview ? (
+              <section className="console-section">
+                <ConsoleSectionHeader eyebrow="分析" title="运营图表" meta={<span className="console-plain-meta">7 天窗口</span>} />
+                <AnalyticsOverviewPanel overview={overview} />
+              </section>
+            ) : null}
           </div>
 
           <aside className="console-sidebar">

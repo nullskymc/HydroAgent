@@ -1,46 +1,36 @@
 'use client'
 
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { marked } from 'marked'
 import { ArrowUp, Bot, ChevronDown, LoaderCircle, Trash2, Waves, Workflow, Wrench } from 'lucide-react'
-import { ChatMessage, ConversationDetail, ConversationSummary, IrrigationPlan, StreamEvent, ToolTrace as PersistedToolTrace } from '@/lib/types'
+import {
+  ChatMessage,
+  ConversationDetail,
+  ConversationSummary,
+  IrrigationPlan,
+  StreamEvent,
+  ToolProgressStepViewModel,
+  ToolProgressViewModel,
+  ToolTrace as PersistedToolTrace,
+} from '@/lib/types'
 import { cn, parseJsonSafe } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge, StatusDot } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { ChatSidebar } from '@/components/chat-sidebar'
-
-type ToolTraceEntry = {
-  id: string
-  title: string
-  detail: string
-  tone?: 'default' | 'success' | 'warning' | 'danger'
-}
-
-type ToolTrace = {
-  trace_id?: string
-  status: 'running' | 'completed' | 'error'
-  entries: ToolTraceEntry[]
-}
+import { MessageRichText } from '@/components/message-rich-text'
+import { toPlanCardViewModel, toToolProgressStep, toToolProgressViewModel } from '@/lib/presenters'
 
 type LocalMessage = ChatMessage & {
   localId: string
   plan?: IrrigationPlan | null
-  toolTrace?: ToolTrace | null
+  toolTrace?: ToolProgressViewModel | null
 }
-
-type NoticeTone = 'default' | 'success' | 'warning' | 'danger'
 
 const quickPrompts = [
   '为 soil moisture 最低的分区生成灌溉计划',
   '检查待审批计划并说明风险',
   '查看已批准计划是否可以执行',
 ]
-
-marked.setOptions({
-  gfm: true,
-  breaks: true,
-})
 
 function createLocalId() {
   return Math.random().toString(36).slice(2, 10)
@@ -53,44 +43,62 @@ function createToolTraceMessage(): LocalMessage {
     localId: createLocalId(),
     toolTrace: {
       status: 'running',
-      entries: [],
+      headline: '正在分析灌溉条件',
+      summary: '系统正在准备处理步骤…',
+      steps: [],
     },
   }
 }
 
-function createTraceEntry(title: string, detail: string, tone: NoticeTone = 'default'): ToolTraceEntry {
-  return {
-    id: createLocalId(),
-    title,
-    detail,
-    tone,
-  }
-}
-
-function eventToTraceEntry(event: StreamEvent): ToolTraceEntry | null {
+function eventToTraceEntry(event: StreamEvent): ToolProgressStepViewModel | null {
   if (event.type === 'tool_call') {
-    return createTraceEntry('工具调用', event.tool || event.content || '未知工具')
+    return toToolProgressStep({
+      id: createLocalId(),
+      title: '开始处理',
+      detail: undefined,
+      toolName: event.tool,
+      agentName: event.agent_name,
+      tone: 'default',
+    })
   }
   if (event.type === 'tool_result') {
-    return createTraceEntry('工具返回', event.output_preview || `${event.tool || '当前工具'} 已返回结构化结果`, 'success')
+    return toToolProgressStep({
+      id: createLocalId(),
+      title: '步骤完成',
+      detail: event.output_preview || undefined,
+      toolName: event.tool,
+      agentName: event.agent_name,
+      durationMs: event.duration_ms,
+      tone: 'success',
+    })
   }
   if (event.type === 'approval_requested') {
-    const reasons = Array.isArray(event.details?.reasons) ? event.details?.reasons.join('、') : 'start 操作需要审批'
-    return createTraceEntry('审批边界', reasons, 'warning')
+    return toToolProgressStep({
+      id: createLocalId(),
+      title: '等待审批',
+      detail: Array.isArray(event.details?.reasons) ? event.details?.reasons.join('、') : '执行启动计划前需要人工审批。',
+      tone: 'warning',
+    })
   }
   if (event.type === 'subagent_handoff') {
-    return createTraceEntry(
-      `委派 ${event.subagent || 'subagent'}`,
-      `${event.zone_id || '待识别分区'} · ${event.task_description || '正在准备任务说明'}`,
-      'default',
-    )
+    return toToolProgressStep({
+      id: createLocalId(),
+      title: '分配分析任务',
+      detail: event.task_description || '系统正在整理当前分区任务。',
+      agentName: event.agent_name,
+      subagentName: event.subagent,
+      tone: 'default',
+    })
   }
   if (event.type === 'subagent_result') {
-    return createTraceEntry(
-      `${event.subagent || 'subagent'} 已返回`,
-      event.result_preview || '子代理已完成处理',
-      'success',
-    )
+    return toToolProgressStep({
+      id: createLocalId(),
+      title: '分析结果已返回',
+      detail: event.result_preview || '相关分析已完成。',
+      agentName: event.agent_name,
+      subagentName: event.subagent,
+      tone: 'success',
+    })
   }
   return null
 }
@@ -98,7 +106,7 @@ function eventToTraceEntry(event: StreamEvent): ToolTraceEntry | null {
 function getMessageRoleLabel(message: LocalMessage) {
   if (message.role === 'assistant') return 'HydroAgent'
   if (message.plan) return '计划回执'
-  if (message.toolTrace) return '工具链'
+  if (message.toolTrace) return '处理进度'
   return '工具回执'
 }
 
@@ -107,23 +115,7 @@ function toLocalMessage(message: ChatMessage): LocalMessage {
   return {
     ...message,
     localId: createLocalId(),
-    toolTrace: persistedTrace
-      ? {
-          trace_id: persistedTrace.trace_id,
-          status:
-            persistedTrace.status === 'error'
-              ? 'error'
-              : persistedTrace.status === 'running'
-                ? 'running'
-                : 'completed',
-          entries: persistedTrace.steps.map((step) => ({
-            id: `${persistedTrace.trace_id}-${step.step_index}`,
-            title: step.title,
-            detail: step.detail,
-            tone: step.status === 'error' ? 'danger' : step.status === 'running' ? 'warning' : 'success',
-          })),
-        }
-      : null,
+    toolTrace: persistedTrace ? toToolProgressViewModel(persistedTrace) : null,
   }
 }
 
@@ -134,21 +126,6 @@ function planMessage(plan: IrrigationPlan): LocalMessage {
     localId: `plan-${plan.plan_id}`,
     plan,
   }
-}
-
-function formatPlanTone(plan: IrrigationPlan) {
-  if (plan.execution_status === 'executed') return 'success'
-  if (plan.approval_status === 'rejected' || plan.risk_level === 'high') return 'danger'
-  if (plan.approval_status === 'pending' || plan.risk_level === 'medium') return 'warning'
-  return 'default'
-}
-
-function renderMarkdown(content: string | null | undefined) {
-  const safeSource = String(content || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  return marked.parse(safeSource) as string
 }
 
 function MessageAvatar({ message }: { message: LocalMessage }) {
@@ -175,11 +152,18 @@ function MessageAvatar({ message }: { message: LocalMessage }) {
   return <div className="message-avatar message-avatar-toolchain">工</div>
 }
 
-function ToolTraceCard({ trace }: { trace: ToolTrace }) {
+function ToolTraceCard({ trace }: { trace: ToolProgressViewModel }) {
   const [expanded, setExpanded] = useState(false)
-  const latestEntry = trace.entries.at(-1)
-  const summary = latestEntry?.detail || (trace.status === 'running' ? '正在等待工具链返回状态…' : '本轮没有工具事件')
+  const summary = trace.summary || (trace.status === 'running' ? '正在等待处理结果…' : '本轮没有处理步骤')
   const isRunning = trace.status === 'running'
+
+  const sections = [
+    {
+      key: 'progress',
+      label: '处理进度',
+      entries: trace.steps,
+    },
+  ]
 
   return (
     <div className="tool-trace-card">
@@ -194,9 +178,9 @@ function ToolTraceCard({ trace }: { trace: ToolTrace }) {
             <span className={cn('tool-trace-spinner', isRunning && 'is-running')}>
               <LoaderCircle size={14} />
             </span>
-            <strong>{isRunning ? '工具链执行中' : trace.status === 'error' ? '工具链中断' : '工具链已完成'}</strong>
+            <strong>{trace.headline}</strong>
             <Badge tone={trace.status === 'error' ? 'danger' : isRunning ? 'warning' : 'success'}>
-              {trace.entries.length} 步
+              {trace.steps.length} 步
             </Badge>
           </div>
           <p>{summary}</p>
@@ -206,19 +190,34 @@ function ToolTraceCard({ trace }: { trace: ToolTrace }) {
 
       {expanded ? (
         <div className="tool-trace-entries">
-          {trace.entries.map((entry, index) => (
-            <div key={entry.id} className="tool-trace-entry">
-              <div className="tool-trace-entry-rail">
-                <span className={cn('tool-trace-entry-dot', entry.tone && `is-${entry.tone}`)} />
-                {index < trace.entries.length - 1 ? <span className="tool-trace-entry-line" /> : null}
+          {sections.map((section) => (
+            <div key={section.key} className="tool-trace-section">
+              <div className="tool-trace-entry-head">
+                <span>{section.label}</span>
+                <Badge>{section.entries.length}</Badge>
               </div>
-              <div className="tool-trace-entry-copy">
-                <div className="tool-trace-entry-head">
-                  <span>{entry.title}</span>
-                  <Badge tone={entry.tone}>{index + 1}</Badge>
+              {section.entries.map((entry, index) => (
+                <div key={entry.id} className="tool-trace-entry">
+                  <div className="tool-trace-entry-rail">
+                    <span className={cn('tool-trace-entry-dot', entry.tone && `is-${entry.tone}`)} />
+                    {index < section.entries.length - 1 ? <span className="tool-trace-entry-line" /> : null}
+                  </div>
+                  <div className="tool-trace-entry-copy">
+                    <div className="tool-trace-entry-head">
+                      <span>{entry.title}</span>
+                      <Badge tone={entry.tone}>{index + 1}</Badge>
+                    </div>
+                    <p>{entry.detail}</p>
+                    {entry.meta.length > 0 ? (
+                      <div className="audit-console-meta">
+                        {entry.meta.map((metaItem) => (
+                          <span key={`${entry.id}-${metaItem}`}>{metaItem}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-                <p>{entry.detail}</p>
-              </div>
+              ))}
             </div>
           ))}
         </div>
@@ -241,6 +240,7 @@ export function ChatPanel({
   )
   const [input, setInput] = useState('')
   const [isPending, startTransition] = useTransition()
+  const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -287,6 +287,12 @@ export function ChatPanel({
     return loadConversation(conversation.session_id)
   }
 
+  function isRenderablePlan(plan: unknown): plan is IrrigationPlan {
+    if (!plan || typeof plan !== 'object') return false
+    const candidate = plan as Record<string, unknown>
+    return typeof candidate.plan_id === 'string' && candidate.plan_id.trim().length > 0
+  }
+
   async function deleteConversation(sessionId: string) {
     setError(null)
     setDeletingConversationId(sessionId)
@@ -323,7 +329,7 @@ export function ChatPanel({
     })
   }
 
-  function appendToolTraceEntry(traceId: string, entry: ToolTraceEntry) {
+  function appendToolTraceEntry(traceId: string, entry: ToolProgressStepViewModel) {
     setMessages((current) =>
       current.map((item) =>
         item.localId === traceId && item.toolTrace
@@ -331,7 +337,8 @@ export function ChatPanel({
               ...item,
               toolTrace: {
                 ...item.toolTrace,
-                entries: [...item.toolTrace.entries, entry],
+                summary: entry.detail,
+                steps: [...item.toolTrace.steps, entry],
               },
             }
           : item,
@@ -339,7 +346,7 @@ export function ChatPanel({
     )
   }
 
-  function setToolTraceStatus(traceId: string, status: ToolTrace['status']) {
+  function setToolTraceStatus(traceId: string, status: ToolProgressViewModel['status']) {
     setMessages((current) =>
       current
         .map((item) =>
@@ -349,11 +356,17 @@ export function ChatPanel({
                 toolTrace: {
                   ...item.toolTrace,
                   status,
+                  headline:
+                    status === 'error'
+                      ? '处理出现问题'
+                      : status === 'running'
+                        ? '正在分析灌溉条件'
+                        : '分析与计划已完成',
                 },
               }
             : item,
         )
-        .filter((item) => !(item.localId === traceId && item.toolTrace && item.toolTrace.entries.length === 0 && status === 'completed')),
+        .filter((item) => !(item.localId === traceId && item.toolTrace && item.toolTrace.steps.length === 0 && status === 'completed')),
     )
   }
 
@@ -374,10 +387,11 @@ export function ChatPanel({
 
   async function submitMessage(nextInput?: string) {
     const draft = (nextInput ?? input).trim()
-    if (!draft) return
+    if (!draft || isStreaming) return
 
     setError(null)
     setInput('')
+    setIsStreaming(true)
 
     let conversationId = activeConversation?.conversation.session_id
     if (!conversationId) {
@@ -390,127 +404,155 @@ export function ChatPanel({
     const toolTraceMessage = createToolTraceMessage()
     const assistantMessage: LocalMessage = { role: 'assistant', content: '', localId: createLocalId() }
     setMessages((current) => [...current, userMessage, toolTraceMessage, assistantMessage])
+    let streamFailed = false
 
-    const response = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversation_id: conversationId, message: draft }),
-    })
-    if (!response.ok || !response.body) {
-      throw new Error(await response.text())
-    }
+    try {
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: conversationId, message: draft }),
+      })
+      if (!response.ok || !response.body) {
+        throw new Error(await response.text())
+      }
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const chunks = buffer.split('\n\n')
-      buffer = chunks.pop() || ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() || ''
 
-      for (const chunk of chunks) {
-        const line = chunk.split('\n').find((item) => item.startsWith('data: '))
-        if (!line) continue
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find((item) => item.startsWith('data: '))
+          if (!line) continue
 
-        const payload = parseJsonSafe<StreamEvent>(line.slice(6), { type: 'error', content: '流式数据解析失败' })
-        if (payload.type === 'text') {
-          setMessages((current) =>
-            current.map((item) =>
-              item.localId === assistantMessage.localId
-                ? { ...item, content: `${item.content || ''}${payload.content}` }
-                : item,
-            ),
-          )
-        } else if (
-          payload.type === 'plan_proposed' ||
-          payload.type === 'plan_updated' ||
-          payload.type === 'approval_result' ||
-          payload.type === 'execution_result'
-        ) {
-          upsertPlan(payload.plan)
-        } else if (payload.type === 'error') {
-          setError(payload.content)
-          setToolTraceStatus(toolTraceMessage.localId, 'error')
-        } else if (payload.type !== 'done') {
-          const traceEntry = eventToTraceEntry(payload)
-          if (traceEntry) {
-            appendToolTraceEntry(toolTraceMessage.localId, traceEntry)
+          const payload = parseJsonSafe<StreamEvent>(line.slice(6), { type: 'error', content: '流式数据解析失败' })
+          if (payload.type === 'text') {
+            // 现在主链路只有一个 supervisor，仍然只接正式文本事件，避免工具输出混入答案。
+            if (payload.agent_name && payload.agent_name !== 'hydro-supervisor') {
+              continue
+            }
+            setMessages((current) =>
+              current.map((item) =>
+                item.localId === assistantMessage.localId
+                  ? { ...item, content: `${item.content || ''}${payload.content}` }
+                  : item,
+              ),
+            )
+          } else if (
+            payload.type === 'plan_proposed' ||
+            payload.type === 'plan_updated' ||
+            payload.type === 'approval_result' ||
+            payload.type === 'execution_result'
+          ) {
+            if (isRenderablePlan(payload.plan)) {
+              upsertPlan(payload.plan)
+            }
+          } else if (payload.type === 'error') {
+            streamFailed = true
+            setError(payload.content)
+            setToolTraceStatus(toolTraceMessage.localId, 'error')
+          } else if (payload.type !== 'done') {
+            const traceEntry = eventToTraceEntry(payload)
+            if (traceEntry) {
+              appendToolTraceEntry(toolTraceMessage.localId, traceEntry)
+            }
           }
         }
       }
+    } catch (error) {
+      streamFailed = true
+      setError(error instanceof Error ? error.message : '消息发送失败')
+      setToolTraceStatus(toolTraceMessage.localId, 'error')
+    } finally {
+      if (!streamFailed) {
+        setToolTraceStatus(toolTraceMessage.localId, 'completed')
+      }
+      setIsStreaming(false)
+      await refreshConversations()
     }
-
-    setToolTraceStatus(toolTraceMessage.localId, 'completed')
-    await refreshConversations()
   }
 
   function renderPlan(plan: IrrigationPlan) {
-    const tone = formatPlanTone(plan)
-    const evidence = plan.evidence_summary || {}
-    const safety = plan.safety_review || {}
+    const view = toPlanCardViewModel(plan)
 
     return (
       <div className="plan-card">
         <div className="plan-card-head">
           <div>
-            <strong>{plan.zone_name || plan.zone_id}</strong>
-            <p className="inline-muted">{plan.plan_id}</p>
+            <strong>{view.title}</strong>
+            <p className="inline-muted">{view.summary}</p>
           </div>
           <div className="chat-header-meta">
-            <Badge tone={tone}>{plan.proposed_action}</Badge>
-            <Badge>{plan.risk_level}</Badge>
-            <Badge>{plan.status}</Badge>
+            <Badge tone={view.actionTone}>{view.actionLabel}</Badge>
+            <Badge tone={view.riskTone}>{view.riskLabel}</Badge>
+            <Badge tone={view.statusTone}>{view.statusLabel}</Badge>
           </div>
         </div>
-        <p>{plan.reasoning_summary || '无摘要'}</p>
+        <div className="plan-reason-list">
+          {view.reasons.map((reason) => (
+            <div key={`${view.planId}-${reason}`} className="plan-reason-item">
+              <span className="plan-reason-dot" />
+              <p>{reason}</p>
+            </div>
+          ))}
+        </div>
         <div className="plan-metric-grid">
-          <div className="plan-metric">
-            <span>审批</span>
-            <strong>{plan.approval_status}</strong>
-          </div>
-          <div className="plan-metric">
-            <span>执行</span>
-            <strong>{plan.execution_status}</strong>
-          </div>
-          <div className="plan-metric">
-            <span>建议时长</span>
-            <strong>{plan.recommended_duration_minutes} 分钟</strong>
-          </div>
-          <div className="plan-metric">
-            <span>风险</span>
-            <strong>{plan.risk_level}</strong>
-          </div>
+          {view.metrics.map((metric) => (
+            <div key={`${view.planId}-${metric.label}`} className="plan-metric">
+              <span>{metric.label}</span>
+              <strong className={metric.tone ? `tone-${metric.tone}` : ''}>{metric.value}</strong>
+            </div>
+          ))}
         </div>
         <div className="plan-evidence-grid">
-          <div className="plan-evidence-card">
-            <span>证据摘要</span>
-            <p>{JSON.stringify(evidence)}</p>
-          </div>
-          <div className="plan-evidence-card">
-            <span>安全复核</span>
-            <p>{JSON.stringify(safety)}</p>
+          {view.evidenceSections.map((section) => (
+            <div key={`${view.planId}-${section.title}`} className="plan-evidence-card">
+              <span>{section.title}</span>
+              <div className="plan-evidence-list">
+                {section.items.map((item) => (
+                  <div key={`${section.title}-${item.label}`} className="plan-evidence-item">
+                    <label>{item.label}</label>
+                    <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="plan-safety-panel">
+          <span>风险与约束</span>
+          <div className="plan-safety-list">
+            {view.safetyItems.map((item) => (
+              <div key={`${view.planId}-${item.label}-${item.detail}`} className="plan-safety-item">
+                <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.label}</strong>
+                <p>{item.detail}</p>
+              </div>
+            ))}
           </div>
         </div>
         <div className="action-row">
           <Button
-            disabled={isPending || plan.approval_status !== 'pending'}
+            disabled={isPending || !view.canApprove}
             onClick={() => startTransition(async () => actOnPlan(plan.plan_id, 'approve'))}
           >
             批准
           </Button>
           <Button
             variant="secondary"
-            disabled={isPending || plan.approval_status !== 'pending'}
+            disabled={isPending || !view.canReject}
             onClick={() => startTransition(async () => actOnPlan(plan.plan_id, 'reject'))}
           >
             拒绝
           </Button>
           <Button
             variant="ghost"
-            disabled={isPending || plan.approval_status !== 'approved' || plan.execution_status === 'executed'}
+            disabled={isPending || !view.canExecute}
             onClick={() => startTransition(async () => actOnPlan(plan.plan_id, 'execute'))}
           >
             执行
@@ -559,7 +601,7 @@ export function ChatPanel({
               <h2>{activeConversation?.conversation.title || '新对话'}</h2>
               <div className="chat-header-meta">
                 <Badge><StatusDot tone="success" /> 流式</Badge>
-                <Badge><Workflow size={12} /> Subagents</Badge>
+                <Badge><Workflow size={12} /> Direct Tools</Badge>
                 <Badge><Waves size={12} /> Plan Timeline</Badge>
               </div>
             </div>
@@ -608,13 +650,8 @@ export function ChatPanel({
                     {message.plan ? renderPlan(message.plan) : null}
                     {message.toolTrace ? <ToolTraceCard trace={message.toolTrace} /> : null}
                     {!message.plan && message.content ? (
-                      <div
-                        className={cn('message-content', message.role === 'assistant' && 'markdown-content')}
-                        {...(message.role === 'assistant'
-                          ? { dangerouslySetInnerHTML: { __html: renderMarkdown(message.content) } }
-                          : {})}
-                      >
-                        {message.role === 'user' ? <p>{message.content}</p> : null}
+                      <div className={cn('message-content', message.role === 'assistant' && 'markdown-content')}>
+                        {message.role === 'user' ? <p>{message.content}</p> : <MessageRichText content={message.content} />}
                       </div>
                     ) : null}
                   </div>
@@ -636,7 +673,7 @@ export function ChatPanel({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault()
-                    startTransition(async () => submitMessage())
+                    void submitMessage()
                   }
                 }}
                 placeholder="输入分区灌溉问题、计划生成请求、审批指令或执行指令"
@@ -645,8 +682,8 @@ export function ChatPanel({
               <Button
                 size="icon"
                 className="composer-send-button"
-                disabled={isPending || !input.trim()}
-                onClick={() => startTransition(async () => submitMessage())}
+                disabled={isPending || isStreaming || !input.trim()}
+                onClick={() => void submitMessage()}
               >
                 <ArrowUp size={16} />
               </Button>

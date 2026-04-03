@@ -1,9 +1,8 @@
 """
-HydroAgent deepagents harness.
+HydroAgent 单代理 LangChain harness。
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -12,121 +11,70 @@ import sys
 import time
 from typing import Any, AsyncIterator, Optional
 
-from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
+from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
 
-from src.database.models import AgentDecisionLog, SessionLocal
-from src.llm.tool_argument_parser import ToolArgumentParserAgent, wrap_tool_registry
+from src.llm.persistence import get_hydro_persistence
+from src.llm.tool_argument_parser import ACTIVE_CONVERSATION_ID, ToolArgumentParserAgent, wrap_tool_registry
 
 logger = logging.getLogger("hydroagent.agent")
 
 
-HYDRO_SYSTEM_PROMPT = """你是 HydroAgent，一个面向多分区农场的监督执行型智能灌溉系统。
+HYDRO_SYSTEM_PROMPT = """你是 HydroAgent，一个面向多分区农场的审慎型智能灌溉系统。
 
-你的职责不是直接替用户草率开灌，而是：
-1. 识别具体的 zone 和 actuator。
-2. 先收集证据：传感器、天气、历史计划、当前运行状态。
-3. 生成结构化灌溉计划，并解释风险与理由。
-4. 对任何 start 行为坚持审批边界，未批准不得执行。
-5. 批准后执行计划，并记录执行回执。
+你的工作方式是单代理直接编排工具，不要再假想任何 subagent、task 委派或多角色交接。
 
-请优先使用这些角色化思维：
-- Supervisor: 决定当前任务该拆给哪个子代理。
-- Zone Analyst: 获取某个 zone 的证据和约束。
-- Planner: 生成或更新结构化灌溉计划。
-- Safety Reviewer: 主动寻找不该执行的理由。
-- Execution Agent: 仅在计划已批准时执行。
+必须遵守以下原则：
+1. 先识别目标分区，再收集证据：传感器、天气、当前运行状态、历史计划。
+2. 涉及分区级工具时，必须传入准确的 canonical zone_id，绝不能省略 zone_id。
+3. 当用户只说“分区 1 / 2”或中文名称时，先调用 list_farm_zones 获取目录，再使用返回的 zone_id。
+4. 当用户没有指定 zone，但请求的是“生成计划 / 检查状态 / 审批检查 / 执行检查”这类农场级任务时，不要先反问；先调用 list_farm_zones，按 enabled zone 逐个处理，再汇总结论。
+5. 生成计划时，必须说明证据、风险、建议时长和是否需要审批。
+6. 任何 start 行为都不能绕过审批边界；未批准计划不得执行。
+7. 若天气提示未来 48 小时可能降雨，除非湿度进入 emergency band，否则优先建议 hold/defer。
+8. 若执行器状态未知、禁用或已经运行，避免自动执行并明确提示风险。
+9. 若传感器缺失或无效，生成 hold/defer 计划，而不是 start 计划。
 
 回答要求：
 - 使用中文。
-- 引用具体 zone、湿度、天气、风险级别和计划编号。
-- 当生成计划时，先解释结论，再附带行动建议。
-- 当工具返回结构化数据时，优先用它，不要编造字段。
-
-调度要求：
-- 你是 supervisor，本身只保留少量总览能力，涉及真实证据、计划、安全复核、执行时，必须优先委派给合适的 subagent。
-- 任何 zone 证据收集或状态核查，先交给 zone-analyst。
-- 任何创建、修改、批准、拒绝计划，交给 planner。
-- 任何 start 类建议、雨天风险、传感器缺失、执行器异常的挑战性复核，交给 safety-reviewer。
-- 任何执行已批准计划或停灌操作，交给 execution-agent。
-- 如果请求涉及多个 zone，使用并行 task 调用分别委派，不要把多个 zone 混在一个 subagent 任务里。
-- 在最终回答里明确说明每一步由哪个 subagent 完成，便于审计。
+- 引用具体 zone_id、湿度、天气、风险级别和计划编号。
+- 当请求涉及多个分区时，按分区逐个处理，不要把多个分区混成一个模糊结论。
+- 当工具返回结构化数据时，优先复述关键字段，不要编造。
 """
 
-SUPERVISOR_TOOL_NAMES = (
+AGENT_TOOL_NAMES = (
     "list_farm_zones",
+    "query_sensor_data",
+    "query_weather",
+    "get_zone_operating_status",
+    "recommend_irrigation_plan",
+    "statistical_analysis",
+    "anomaly_detection",
+    "time_series_forecast",
+    "correlation_analysis",
+    "create_irrigation_plan",
     "get_plan_status",
+    "approve_irrigation_plan",
+    "reject_irrigation_plan",
+    "execute_approved_plan",
+    "control_irrigation",
     "manage_alarm",
 )
-
-SUBAGENT_TOOL_NAMES = {
-    "zone-analyst": (
-        "list_farm_zones",
-        "query_sensor_data",
-        "query_weather",
-        "get_zone_operating_status",
-        "recommend_irrigation_plan",
-        "statistical_analysis",
-        "anomaly_detection",
-        "time_series_forecast",
-        "correlation_analysis",
-    ),
-    "planner": (
-        "create_irrigation_plan",
-        "get_plan_status",
-        "approve_irrigation_plan",
-        "reject_irrigation_plan",
-    ),
-    "safety-reviewer": (
-        "get_plan_status",
-        "query_sensor_data",
-        "query_weather",
-        "get_zone_operating_status",
-        "recommend_irrigation_plan",
-    ),
-    "execution-agent": (
-        "get_plan_status",
-        "get_zone_operating_status",
-        "execute_approved_plan",
-        "control_irrigation",
-    ),
-}
-
-SUBAGENT_SYSTEM_PROMPTS = {
-    "zone-analyst": (
-        "Focus on one zone at a time. Gather concrete evidence only. "
-        "Return zone_id, soil moisture, weather risk, actuator state, and missing-data constraints."
-    ),
-    "planner": (
-        "You manage structured irrigation plans only. "
-        "Create, approve, reject, or inspect plan state based on explicit user intent or supervisor instructions."
-    ),
-    "safety-reviewer": (
-        "You are conservative. Challenge risky start actions. "
-        "Explicitly check rain risk, missing sensor data, disabled actuators, emergency-band exceptions, and approval boundaries."
-    ),
-    "execution-agent": (
-        "You execute approved plans or stop irrigation only after validation. "
-        "Before execution, verify approval_status=approved, actuator readiness, and plan action=start."
-    ),
-}
 
 _ZONE_ID_PATTERN = re.compile(r"\bzone_[a-zA-Z0-9]+\b")
 _PLAN_ID_PATTERN = re.compile(r"\bplan_[a-zA-Z0-9]+\b")
 
 
 class HydroDeepAgent:
-    """Deep agent wrapper with MCP tools and SSE-friendly event conversion."""
+    """Official LangChain agent wrapper with MCP tools and SSE-friendly event conversion."""
 
     def __init__(self):
         self._agent = None
         self._mcp_client = None
         self._initialized = False
         self._workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        self._checkpointer = MemorySaver()
+        self._checkpointer = None
         self._tool_registry: dict[str, Any] = {}
         self._parser_agent: ToolArgumentParserAgent | None = None
 
@@ -138,6 +86,9 @@ class HydroDeepAgent:
 
         workspace_dir = os.path.join(self._workspace_root, ".hydro_workspace")
         os.makedirs(workspace_dir, exist_ok=True)
+        persistence = get_hydro_persistence()
+        await persistence.initialize()
+        self._checkpointer = persistence.async_saver
 
         llm = ChatOpenAI(
             model=config.MODEL_NAME,
@@ -164,52 +115,21 @@ class HydroDeepAgent:
         self._tool_registry = wrap_tool_registry(self._tool_registry, self._parser_agent)
         logger.info("[HydroAgent] Loaded %s MCP tools", len(mcp_tools))
 
-        subagents = [
-            {
-                "name": "zone-analyst",
-                "description": "Research a specific irrigation zone, collect sensor, weather, and status evidence.",
-                "system_prompt": SUBAGENT_SYSTEM_PROMPTS["zone-analyst"],
-                "tools": _select_tools(self._tool_registry, SUBAGENT_TOOL_NAMES["zone-analyst"]),
-            },
-            {
-                "name": "planner",
-                "description": "Generate or update structured irrigation plans for zones.",
-                "system_prompt": SUBAGENT_SYSTEM_PROMPTS["planner"],
-                "tools": _select_tools(self._tool_registry, SUBAGENT_TOOL_NAMES["planner"]),
-            },
-            {
-                "name": "safety-reviewer",
-                "description": "Challenge risky irrigation actions and identify why a plan should be deferred.",
-                "system_prompt": SUBAGENT_SYSTEM_PROMPTS["safety-reviewer"],
-                "tools": _select_tools(self._tool_registry, SUBAGENT_TOOL_NAMES["safety-reviewer"]),
-            },
-            {
-                "name": "execution-agent",
-                "description": "Execute approved plans only after validating approval state and actuator readiness.",
-                "system_prompt": SUBAGENT_SYSTEM_PROMPTS["execution-agent"],
-                "tools": _select_tools(self._tool_registry, SUBAGENT_TOOL_NAMES["execution-agent"]),
-            },
-        ]
-
-        self._agent = create_deep_agent(
+        self._agent = create_agent(
             model=llm,
-            tools=_select_tools(self._tool_registry, SUPERVISOR_TOOL_NAMES),
+            tools=_select_tools(self._tool_registry, AGENT_TOOL_NAMES),
             system_prompt=HYDRO_SYSTEM_PROMPT,
-            subagents=subagents,
-            memory=["/AGENTS.md"],
             checkpointer=self._checkpointer,
-            backend=FilesystemBackend(root_dir=self._workspace_root, virtual_mode=False),
-            interrupt_on={"control_irrigation": True},
             name="hydro-supervisor",
         )
         self._initialized = True
-        logger.info("[HydroAgent] Deep agent initialized")
+        logger.info("[HydroAgent] Single agent initialized")
 
     async def chat_stream(self, messages: list[dict], conversation_id: str | None = None) -> AsyncIterator[dict]:
         if not self._initialized:
             await self.initialize()
 
-        from langchain_core.messages import AIMessage, HumanMessage
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
         lc_messages = []
         for message in messages:
@@ -222,142 +142,134 @@ class HydroDeepAgent:
 
         input_data = {"messages": lc_messages}
         config = {"configurable": {"thread_id": conversation_id or "hydro-default"}}
-        active_subagent_calls: dict[str, dict[str, Any]] = {}
         active_tool_calls: dict[str, dict[str, Any]] = {}
+        ACTIVE_CONVERSATION_ID.set(conversation_id)
 
         try:
-            async for event in self._agent.astream_events(input_data, config=config, version="v2"):
-                event_name = event.get("event", "")
-                if event_name == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    content = getattr(chunk, "content", None)
-                    if content:
-                        if isinstance(content, list):
-                            for item in content:
-                                text = item.get("text") if isinstance(item, dict) else str(item)
-                                if text:
-                                    yield {"type": "text", "content": text}
-                        else:
-                            yield {"type": "text", "content": str(content)}
-                elif event_name == "on_tool_start":
-                    tool_name = event.get("name", "unknown")
-                    run_id = _get_event_run_key(event)
-                    tool_args = event.get("data", {}).get("input", {})
-                    normalized_args = None
-                    zone_id = None
-                    plan_id = None
-                    if isinstance(tool_args, dict):
-                        resolved_args = await self._parser_agent.normalize_async(tool_name, tool_args) if self._parser_agent else tool_args
-                        normalized_args = resolved_args if resolved_args != tool_args else None
-                        identifiers = _extract_identifiers(resolved_args)
-                        zone_id = identifiers.get("zone_id")
-                        plan_id = identifiers.get("plan_id")
+            async for chunk in self._agent.astream(
+                input_data,
+                config=config,
+                stream_mode=["messages", "updates"],
+                version="v2",
+            ):
+                chunk_type = chunk.get("type")
+                if chunk_type == "messages":
+                    message_data = chunk.get("data")
+                    if not isinstance(message_data, tuple | list) or len(message_data) != 2:
+                        continue
+                    message, metadata = message_data
+                    if _should_emit_assistant_text(message, metadata):
+                        for text in _iter_stream_text(message):
+                            yield {
+                                "type": "text",
+                                "content": text,
+                                "agent_name": metadata.get("langgraph_name") or metadata.get("lc_agent_name"),
+                                "node_name": metadata.get("langgraph_node"),
+                            }
+                    continue
 
-                    active_tool_calls[run_id] = {
-                        "tool_name": tool_name,
-                        "args": tool_args if isinstance(tool_args, dict) else None,
-                        "normalized_args": normalized_args,
-                        "zone_id": zone_id,
-                        "plan_id": plan_id,
-                        "started_at": time.perf_counter(),
-                    }
+                if chunk_type != "updates":
+                    continue
 
-                    yield {
-                        "type": "tool_call",
-                        "tool": tool_name,
-                        "run_id": run_id,
-                        "args": tool_args,
-                        "normalized_args": normalized_args,
-                        "zone_id": zone_id,
-                        "plan_id": plan_id,
-                    }
+                update_data = chunk.get("data")
+                if not isinstance(update_data, dict):
+                    continue
 
-                    if tool_name == "task":
-                        task_key = run_id
-                        delegation = _build_delegation_event(tool_args)
-                        active_subagent_calls[task_key] = delegation
-                        self._record_decision_log(
-                            trigger="chat",
-                            zone_id=delegation.get("zone_id"),
-                            plan_id=delegation.get("plan_id"),
-                            input_context={
-                                "conversation_id": conversation_id,
-                                "event": "subagent_handoff",
-                                "task_description": delegation.get("task_description"),
-                            },
-                            reasoning_chain=f"Supervisor delegated work to {delegation.get('subagent')}.",
-                            tools_used=["task"],
-                            decision_result={
-                                "subagent": delegation.get("subagent"),
-                                "status": "started",
-                            },
-                            reflection_notes="Subagent delegation captured from deepagents task tool.",
-                        )
-                        delegation["run_id"] = run_id
-                        yield delegation
-                elif event_name == "on_tool_end":
-                    tool_name = event.get("name", "unknown")
-                    run_id = _get_event_run_key(event)
-                    tool_meta = active_tool_calls.pop(run_id, {})
-                    output = event.get("data", {}).get("output", "")
-                    if tool_name == "task":
-                        task_key = run_id
-                        delegation = active_subagent_calls.pop(task_key, {"type": "subagent_result"})
-                        result_event = {
-                            "type": "subagent_result",
-                            "run_id": run_id,
-                            "subagent": delegation.get("subagent", "unknown"),
-                            "zone_id": delegation.get("zone_id"),
-                            "plan_id": delegation.get("plan_id"),
-                            "result_preview": _stringify_event_payload(output),
-                        }
-                        self._record_decision_log(
-                            trigger="chat",
-                            zone_id=result_event.get("zone_id"),
-                            plan_id=result_event.get("plan_id"),
-                            input_context={
-                                "conversation_id": conversation_id,
-                                "event": "subagent_result",
-                                "subagent": result_event.get("subagent"),
-                            },
-                            reasoning_chain=f"{result_event.get('subagent')} completed delegated work.",
-                            tools_used=["task"],
-                            decision_result={
-                                "subagent": result_event.get("subagent"),
-                                "status": "completed",
-                                "result_preview": result_event.get("result_preview"),
-                            },
-                            reflection_notes="Subagent completion captured from deepagents task tool.",
-                        )
-                        yield result_event
-                    parsed = _safe_json(output)
-                    duration_ms = None
-                    started_at = tool_meta.get("started_at")
-                    if isinstance(started_at, (int, float)):
-                        duration_ms = int((time.perf_counter() - started_at) * 1000)
-                    identifiers = _extract_identifiers(parsed or {})
-                    zone_id = tool_meta.get("zone_id") or identifiers.get("zone_id")
-                    plan_id = tool_meta.get("plan_id") or identifiers.get("plan_id")
-                    structured_event = _tool_output_to_stream_event(tool_name, parsed)
-                    if structured_event:
-                        yield structured_event
-                    yield {
-                        "type": "tool_result",
-                        "tool": tool_name,
-                        "run_id": run_id,
-                        "args": tool_meta.get("args"),
-                        "normalized_args": tool_meta.get("normalized_args"),
-                        "zone_id": zone_id,
-                        "plan_id": plan_id,
-                        "result": parsed or str(output)[:800],
-                        "output_preview": _stringify_event_payload(output),
-                        "duration_ms": duration_ms,
-                    }
+                for node_name, update in update_data.items():
+                    if not isinstance(update, dict):
+                        continue
+
+                    streamed_messages = update.get("messages")
+                    if not isinstance(streamed_messages, list):
+                        continue
+
+                    for streamed_message in streamed_messages:
+                        if isinstance(streamed_message, AIMessage):
+                            agent_name = _get_message_agent_name(streamed_message, default="hydro-supervisor")
+                            for tool_call in streamed_message.tool_calls or []:
+                                tool_name = str(tool_call.get("name") or "unknown")
+                                run_id = str(tool_call.get("id") or f"{tool_name}-{id(tool_call)}")
+                                tool_args = tool_call.get("args", {})
+                                normalized_args = None
+                                zone_id = None
+                                plan_id = None
+
+                                if isinstance(tool_args, dict):
+                                    resolved_args = (
+                                        await self._parser_agent.normalize_async(tool_name, tool_args)
+                                        if self._parser_agent
+                                        else tool_args
+                                    )
+                                    normalized_args = resolved_args if resolved_args != tool_args else None
+                                    identifiers = _extract_identifiers(resolved_args)
+                                    zone_id = identifiers.get("zone_id")
+                                    plan_id = identifiers.get("plan_id")
+
+                                active_tool_calls[run_id] = {
+                                    "tool_name": tool_name,
+                                    "args": tool_args if isinstance(tool_args, dict) else None,
+                                    "normalized_args": normalized_args,
+                                    "zone_id": zone_id,
+                                    "plan_id": plan_id,
+                                    "started_at": time.perf_counter(),
+                                    "agent_name": agent_name,
+                                    "node_name": node_name,
+                                }
+
+                                yield {
+                                    "type": "tool_call",
+                                    "tool": tool_name,
+                                    "run_id": run_id,
+                                    "args": tool_args if isinstance(tool_args, dict) else None,
+                                    "normalized_args": normalized_args,
+                                    "zone_id": zone_id,
+                                    "plan_id": plan_id,
+                                    "agent_name": agent_name,
+                                    "node_name": node_name,
+                                }
+
+                        elif isinstance(streamed_message, ToolMessage):
+                            run_id = str(getattr(streamed_message, "tool_call_id", None) or id(streamed_message))
+                            tool_meta = active_tool_calls.pop(run_id, {})
+                            tool_name = str(getattr(streamed_message, "name", None) or tool_meta.get("tool_name") or "unknown")
+                            output = _extract_tool_message_payload(streamed_message)
+                            parsed = _safe_json(output)
+                            duration_ms = None
+                            started_at = tool_meta.get("started_at")
+                            if isinstance(started_at, (int, float)):
+                                duration_ms = int((time.perf_counter() - started_at) * 1000)
+                            identifiers = _extract_identifiers(parsed or {})
+                            zone_id = tool_meta.get("zone_id") or identifiers.get("zone_id")
+                            plan_id = tool_meta.get("plan_id") or identifiers.get("plan_id")
+                            agent_name = tool_meta.get("agent_name")
+
+                            structured_event = _tool_output_to_stream_event(tool_name, parsed)
+                            if structured_event:
+                                structured_event["agent_name"] = agent_name
+                                structured_event["node_name"] = node_name
+                                yield structured_event
+
+                            yield {
+                                "type": "tool_result",
+                                "tool": tool_name,
+                                "run_id": run_id,
+                                "args": tool_meta.get("args"),
+                                "normalized_args": tool_meta.get("normalized_args"),
+                                "zone_id": zone_id,
+                                "plan_id": plan_id,
+                                "result": parsed or str(output)[:800],
+                                "output_preview": _stringify_event_payload(output),
+                                "duration_ms": duration_ms,
+                                "agent_name": agent_name,
+                                "node_name": node_name,
+                            }
             yield {"type": "done"}
         except Exception as exc:
             logger.error("[HydroAgent] chat_stream failed: %s", exc, exc_info=True)
             yield {"type": "error", "content": f"处理请求时出错：{exc}"}
             yield {"type": "done"}
+        finally:
+            ACTIVE_CONVERSATION_ID.set(None)
 
     async def chat(self, messages: list[dict], conversation_id: str | None = None) -> str:
         parts = []
@@ -384,39 +296,6 @@ class HydroDeepAgent:
 
     async def cleanup(self):
         return
-
-    def _record_decision_log(
-        self,
-        *,
-        trigger: str,
-        zone_id: str | None,
-        plan_id: str | None,
-        input_context: dict[str, Any],
-        reasoning_chain: str,
-        tools_used: list[str],
-        decision_result: dict[str, Any],
-        reflection_notes: str,
-    ):
-        db = SessionLocal()
-        try:
-            db.add(
-                AgentDecisionLog(
-                    trigger=trigger,
-                    zone_id=zone_id,
-                    plan_id=plan_id,
-                    input_context=input_context,
-                    reasoning_chain=reasoning_chain,
-                    tools_used=tools_used,
-                    decision_result=decision_result,
-                    reflection_notes=reflection_notes,
-                )
-            )
-            db.commit()
-        except Exception as exc:
-            db.rollback()
-            logger.warning("[HydroAgent] Failed to persist decision log: %s", exc)
-        finally:
-            db.close()
 
 
 def _safe_json(value):
@@ -445,25 +324,8 @@ def _select_tools(tool_registry: dict[str, Any], names: tuple[str, ...]) -> list
             continue
         selected.append(tool)
     if missing:
-        logger.warning("[HydroAgent] Missing MCP tools for partition: %s", ", ".join(missing))
+        logger.warning("[HydroAgent] Missing MCP tools: %s", ", ".join(missing))
     return selected
-
-
-def _get_event_run_key(event: dict[str, Any]) -> str:
-    return str(event.get("run_id") or event.get("name") or id(event))
-
-
-def _build_delegation_event(tool_args: dict[str, Any]) -> dict[str, Any]:
-    description = str(tool_args.get("description", "")).strip()
-    subagent = str(tool_args.get("subagent_type", "unknown")).strip() or "unknown"
-    identifiers = _extract_identifiers(tool_args, description)
-    return {
-        "type": "subagent_handoff",
-        "subagent": subagent,
-        "task_description": description,
-        "zone_id": identifiers.get("zone_id"),
-        "plan_id": identifiers.get("plan_id"),
-    }
 
 
 def _extract_identifiers(payload: Any, text_fallback: str = "") -> dict[str, str | None]:
@@ -501,7 +363,7 @@ def _search_pattern(pattern: re.Pattern[str], text_value: str) -> str | None:
 def _stringify_event_payload(payload: Any, limit: int = 240) -> str:
     parsed = _safe_json(payload)
     if parsed is not None:
-        # 将结构化结果压平为短预览，便于前端时间线和审计日志展示。
+        # 结构化工具结果压平后再进入时间线，方便前端展示最近一步摘要。
         text = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
     elif hasattr(payload, "content"):
         text = _stringify_event_payload(payload.content, limit=limit)
@@ -510,19 +372,74 @@ def _stringify_event_payload(payload: Any, limit: int = 240) -> str:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
+def _get_message_agent_name(message: Any, default: str | None = None) -> str | None:
+    agent_name = getattr(message, "name", None)
+    return str(agent_name) if isinstance(agent_name, str) and agent_name else default
+
+
+def _should_emit_assistant_text(message: Any, metadata: dict[str, Any] | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("langgraph_node") != "model":
+        return False
+    agent_name = metadata.get("langgraph_name") or metadata.get("lc_agent_name")
+    return agent_name in {None, "", "hydro-supervisor"}
+
+
+def _iter_stream_text(message: Any):
+    content_blocks = getattr(message, "content_blocks", None)
+    if not isinstance(content_blocks, list):
+        return
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text:
+            yield text
+
+
+def _extract_tool_message_payload(message: Any) -> Any:
+    artifact = getattr(message, "artifact", None)
+    if isinstance(artifact, dict):
+        structured = artifact.get("structured_content")
+        if isinstance(structured, dict) and "result" in structured:
+            return structured.get("result")
+
+    content_blocks = getattr(message, "content_blocks", None)
+    if isinstance(content_blocks, list):
+        texts = [
+            block.get("text")
+            for block in content_blocks
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        if len(texts) == 1:
+            return texts[0]
+        if texts:
+            return "\n".join(texts)
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    return str(content or "")
+
+
 def _tool_output_to_stream_event(tool_name: str, payload: dict | None) -> dict | None:
     if not payload:
         return None
 
-    if tool_name == "create_irrigation_plan":
+    has_plan_identity = isinstance(payload.get("plan_id"), str) and bool(str(payload.get("plan_id")).strip())
+
+    if tool_name == "create_irrigation_plan" and has_plan_identity:
         return {"type": "plan_proposed", "plan": payload}
-    if tool_name == "get_plan_status":
+    if tool_name == "get_plan_status" and has_plan_identity:
         return {"type": "plan_updated", "plan": payload}
-    if tool_name == "approve_irrigation_plan":
+    if tool_name == "approve_irrigation_plan" and has_plan_identity:
         return {"type": "approval_result", "plan": payload, "decision": "approved"}
-    if tool_name == "reject_irrigation_plan":
+    if tool_name == "reject_irrigation_plan" and has_plan_identity:
         return {"type": "approval_result", "plan": payload, "decision": "rejected"}
-    if tool_name == "execute_approved_plan":
+    if tool_name == "execute_approved_plan" and has_plan_identity:
         return {"type": "execution_result", "plan": payload}
     if tool_name == "control_irrigation" and payload.get("requires_approval"):
         return {

@@ -2,7 +2,12 @@ import hashlib
 import hmac
 import os
 import base64
+import json
 import time
+
+TOKEN_SECRET = os.getenv("HYDROAUTH_SECRET", "hydroagent-local-secret")
+TOKEN_TTL_SECONDS = int(os.getenv("HYDROAUTH_TTL_SECONDS", "28800"))
+
 
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
@@ -15,12 +20,49 @@ def check_password(password: str, hashed: str) -> bool:
     check_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
     return hmac.compare_digest(pwd_hash, check_hash)
 
-def authenticate(username: str, password: str) -> str:
-    # 演示用，实际应查数据库
+def create_access_token(subject: str, extra_claims: dict | None = None, expires_in: int = TOKEN_TTL_SECONDS) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": subject,
+        "iat": now,
+        "exp": now + expires_in,
+    }
+    if extra_claims:
+        payload.update(extra_claims)
+
+    body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    signature = hmac.new(TOKEN_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+    digest = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{body}.{digest}"
+
+
+def decode_access_token(token: str) -> dict | None:
+    try:
+        body, digest = token.split(".", 1)
+        expected = base64.urlsafe_b64encode(
+            hmac.new(TOKEN_SECRET.encode(), body.encode(), hashlib.sha256).digest()
+        ).decode().rstrip("=")
+        if not hmac.compare_digest(digest, expected):
+            return None
+        padding = "=" * (-len(body) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(f"{body}{padding}".encode()).decode())
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def authenticate(username: str, password: str) -> str | None:
+    # 兼容旧测试和离线开发场景。
     if username == "user" and password == "password":
-        # 简单token
-        token = base64.b64encode(f"{username}:{int(time.time())}".encode()).decode()
-        return token
+        return create_access_token(username, {"roles": ["viewer"]})
     return None
 
-__all__ = ["authenticate", "hash_password", "check_password"]
+__all__ = [
+    "authenticate",
+    "check_password",
+    "create_access_token",
+    "decode_access_token",
+    "hash_password",
+]

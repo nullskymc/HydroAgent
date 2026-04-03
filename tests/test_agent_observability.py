@@ -1,60 +1,23 @@
-import asyncio
-import json
 import unittest
+from unittest.mock import Mock, patch
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+try:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
 
-import src.llm.langchain_agent as agent_module
-from src.database.models import AgentDecisionLog, Base
-from src.llm.langchain_agent import HydroDeepAgent
+    from src.database.models import AlertEvent, AuditEvent, Base
+    from src.services.alert_service import acknowledge_alert, evaluate_alerts, resolve_alert
+    from src.services.auth_service import ensure_auth_seed, record_audit_event
+    from src.services.irrigation_service import bootstrap_default_zones
 
-
-class FakeCompiledDeepAgent:
-    async def astream_events(self, input_data, config=None, version=None):
-        yield {
-            "event": "on_tool_start",
-            "name": "task",
-            "run_id": "task-run-1",
-            "data": {
-                "input": {
-                    "subagent_type": "zone-analyst",
-                    "description": "Collect evidence for zone_id zone_test and related plan_id plan_test.",
-                }
-            },
-        }
-        yield {
-            "event": "on_tool_end",
-            "name": "task",
-            "run_id": "task-run-1",
-            "data": {"output": "Zone evidence collected successfully."},
-        }
-        yield {
-            "event": "on_tool_end",
-            "name": "create_irrigation_plan",
-            "run_id": "tool-run-2",
-            "data": {
-                "output": json.dumps(
-                    {
-                        "plan_id": "plan_test",
-                        "zone_id": "zone_test",
-                        "zone_name": "测试分区",
-                        "status": "pending_approval",
-                        "approval_status": "pending",
-                        "execution_status": "not_started",
-                        "proposed_action": "start",
-                        "risk_level": "low",
-                        "recommended_duration_minutes": 20,
-                        "requires_approval": True,
-                    },
-                    ensure_ascii=False,
-                )
-            },
-        }
+    DEPS_AVAILABLE = True
+except ModuleNotFoundError:
+    DEPS_AVAILABLE = False
 
 
-class TestAgentObservability(unittest.TestCase):
+@unittest.skipUnless(DEPS_AVAILABLE, "SQLAlchemy dependencies are not installed")
+class TestAdminObservability(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.engine = create_engine(
@@ -70,46 +33,40 @@ class TestAgentObservability(unittest.TestCase):
         Base.metadata.drop_all(cls.engine)
 
     def setUp(self):
-        self.original_session_local = agent_module.SessionLocal
-        agent_module.SessionLocal = self.SessionLocal
+        self.db = self.SessionLocal()
+        bootstrap_default_zones(self.db)
+        ensure_auth_seed(self.db)
 
     def tearDown(self):
-        agent_module.SessionLocal = self.original_session_local
+        self.db.close()
 
-    def test_chat_stream_emits_subagent_events_and_persists_logs(self):
-        hydro_agent = HydroDeepAgent()
-        hydro_agent._initialized = True
-        hydro_agent._agent = FakeCompiledDeepAgent()
+    def test_alert_generation_acknowledge_and_resolve(self):
+        with patch("src.services.irrigation_service.DataCollectionModule.get_data", return_value={"data": {"soil_moisture": 8, "temperature": 22, "light_intensity": 180, "rainfall": 0}}), patch(
+            "src.services.irrigation_service.requests.get",
+            return_value=Mock(json=lambda: {"status": "1", "forecasts": [{"casts": [{"date": "2026-04-03", "dayweather": "晴", "daytemp": "28", "nighttemp": "18"}]}]}),
+        ):
+            evaluate_alerts(self.db)
 
-        async def collect_events():
-            return [
-                event
-                async for event in hydro_agent.chat_stream(
-                    [{"role": "user", "content": "为 zone_test 生成灌溉计划"}],
-                    conversation_id="conv-observe",
-                )
-            ]
+        alert = self.db.query(AlertEvent).first()
+        self.assertIsNotNone(alert)
+        acknowledged = acknowledge_alert(self.db, alert.alert_id, "operator")
+        self.assertEqual(acknowledged.status, "acknowledged")
+        resolved = resolve_alert(self.db, alert.alert_id, "operator")
+        self.assertEqual(resolved.status, "resolved")
 
-        events = asyncio.run(collect_events())
-        event_types = [event["type"] for event in events]
-
-        self.assertIn("subagent_handoff", event_types)
-        self.assertIn("subagent_result", event_types)
-        self.assertIn("plan_proposed", event_types)
-        self.assertEqual(event_types[-1], "done")
-
-        db = self.SessionLocal()
-        try:
-            logs = db.query(AgentDecisionLog).order_by(AgentDecisionLog.created_at.asc()).all()
-            self.assertEqual(len(logs), 2)
-            self.assertEqual(logs[0].decision_result["subagent"], "zone-analyst")
-            self.assertEqual(logs[0].decision_result["status"], "started")
-            self.assertEqual(logs[0].zone_id, "zone_test")
-            self.assertEqual(logs[0].plan_id, "plan_test")
-            self.assertEqual(logs[1].decision_result["status"], "completed")
-            self.assertIn("Zone evidence collected", logs[1].decision_result["result_preview"])
-        finally:
-            db.close()
+    def test_audit_event_persists_admin_actions(self):
+        event = record_audit_event(
+            self.db,
+            actor="admin",
+            event_type="user.update",
+            object_type="user",
+            object_id="1",
+            details={"field": "is_active"},
+        )
+        stored = self.db.query(AuditEvent).filter(AuditEvent.audit_id == event.audit_id).first()
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.actor, "admin")
+        self.assertEqual(stored.event_type, "user.update")
 
 
 if __name__ == "__main__":

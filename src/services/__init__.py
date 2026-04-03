@@ -1,5 +1,36 @@
 """HydroAgent service layer."""
 
+from src.services.alert_service import (
+    acknowledge_alert,
+    ensure_alert_rules,
+    evaluate_alerts,
+    list_alert_events,
+    resolve_alert,
+)
+from src.services.asset_service import (
+    bind_sensor_to_zone,
+    create_sensor_device,
+    create_zone_asset,
+    ensure_sensor_devices,
+    list_actuators,
+    list_sensor_devices,
+    update_actuator_asset,
+    update_sensor_device,
+    update_zone_asset,
+)
+from src.services.auth_service import (
+    authenticate_user,
+    ensure_auth_seed,
+    get_current_user,
+    record_audit_event,
+    require_permission,
+)
+from src.services.analytics_service import (
+    get_alert_trend,
+    get_analytics_overview,
+    get_plan_funnel,
+    get_zone_trend,
+)
 from src.services.irrigation_service import (
     approve_plan,
     bootstrap_default_zones,
@@ -14,18 +45,61 @@ from src.services.irrigation_service import (
     reject_plan,
     summarize_system_irrigation,
 )
+from src.services.rbac_service import (
+    get_user_permission_keys,
+    get_user_roles,
+    list_permissions,
+    list_roles,
+    set_user_roles,
+)
+from src.services.report_service import (
+    export_audit_report,
+    export_operations_report,
+    export_zone_report,
+)
 
 __all__ = [
+    "acknowledge_alert",
     "approve_plan",
+    "authenticate_user",
+    "bind_sensor_to_zone",
     "bootstrap_default_zones",
+    "create_sensor_device",
     "create_plan",
+    "create_zone_asset",
+    "ensure_alert_rules",
+    "ensure_auth_seed",
+    "ensure_sensor_devices",
     "execute_plan",
+    "evaluate_alerts",
+    "export_audit_report",
+    "export_operations_report",
+    "export_zone_report",
+    "get_alert_trend",
+    "get_analytics_overview",
     "get_plan_by_id",
+    "get_plan_funnel",
+    "get_current_user",
+    "get_user_permission_keys",
+    "get_user_roles",
     "get_zone_by_id",
     "get_zone_status",
+    "get_zone_trend",
+    "list_actuators",
+    "list_alert_events",
+    "list_permissions",
     "list_plans",
+    "list_roles",
+    "list_sensor_devices",
     "list_zones",
     "manual_override_control",
+    "record_audit_event",
     "reject_plan",
+    "require_permission",
+    "resolve_alert",
+    "set_user_roles",
     "summarize_system_irrigation",
+    "update_actuator_asset",
+    "update_sensor_device",
+    "update_zone_asset",
 ]

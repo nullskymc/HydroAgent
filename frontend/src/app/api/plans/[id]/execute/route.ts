@@ -1,15 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { fetchBackend } from '@/lib/backend'
+import { NextRequest } from 'next/server'
+import { proxyJson } from '@/lib/backend-proxy'
 
 type Params = Promise<{ id: string }>
 
 export async function POST(request: NextRequest, context: { params: Params }) {
   const { id } = await context.params
-  const body = await request.text()
-  const response = await fetchBackend(`/api/plans/${id}/execute`, {
-    method: 'POST',
-    body,
-    headers: { 'Content-Type': 'application/json' },
-  })
-  return NextResponse.json(await response.json(), { status: response.status })
+  return proxyJson(request, `/api/plans/${id}/execute`, { method: 'POST', body: await request.text() })
 }

@@ -1,12 +1,19 @@
 import Link from 'next/link'
-import { Bot, History, Radar, Settings } from 'lucide-react'
+import { BarChart3, Bell, Bot, Boxes, History, Radar, Settings, Users } from 'lucide-react'
+import { getSessionUser } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import { LogoutButton } from '@/components/logout-button'
 
 const navItems = [
-  { href: '/', label: '智能体中枢', icon: Radar },
-  { href: '/chat', label: '智能对话', icon: Bot },
-  { href: '/history', label: '审计记录', icon: History },
-  { href: '/settings', label: '系统设置', icon: Settings },
+  { href: '/', label: '运营总览', icon: Radar, permission: 'dashboard:view' },
+  { href: '/operations', label: '运营中心', icon: BarChart3, permission: 'operations:view' },
+  { href: '/assets', label: '资产中心', icon: Boxes, permission: 'assets:view' },
+  { href: '/alerts', label: '告警中心', icon: Bell, permission: 'alerts:view' },
+  { href: '/users', label: '用户与角色', icon: Users, permission: 'users:view' },
+  { href: '/reports', label: '报表中心', icon: BarChart3, permission: 'reports:view' },
+  { href: '/chat', label: '智能对话', icon: Bot, permission: 'chat:view' },
+  { href: '/history', label: '审计记录', icon: History, permission: 'history:view' },
+  { href: '/settings', label: '系统设置', icon: Settings, permission: 'settings:view' },
 ]
 
 function BrandBlock({ compact = false }: { compact?: boolean }) {
@@ -21,10 +28,13 @@ function BrandBlock({ compact = false }: { compact?: boolean }) {
   )
 }
 
-function ShellNav({ currentPath }: { currentPath: string }) {
+async function ShellNav({ currentPath }: { currentPath: string }) {
+  const user = await getSessionUser()
+  const visibleNavItems = navItems.filter((item) => !item.permission || user?.permissions.includes(item.permission))
+
   return (
     <nav className="nav-list nav-list-horizontal">
-      {navItems.map((item) => {
+      {visibleNavItems.map((item) => {
         const Icon = item.icon
         const active = currentPath === item.href
         return (
@@ -40,13 +50,21 @@ function ShellNav({ currentPath }: { currentPath: string }) {
   )
 }
 
-export function AppShell({ children, currentPath }: { children: React.ReactNode; currentPath: string }) {
+export async function AppShell({ children, currentPath }: { children: React.ReactNode; currentPath: string }) {
+  const user = await getSessionUser()
   return (
     <div className="app-frame">
       <header className="shell-header">
         <div className="shell-topbar">
           <BrandBlock />
           <ShellNav currentPath={currentPath} />
+          <div className="shell-userbox">
+            <div className="shell-usercopy">
+              <strong>{user?.display_name || user?.username || '未登录'}</strong>
+              <span>{user?.roles?.join(' / ') || 'guest'}</span>
+            </div>
+            {user ? <LogoutButton /> : null}
+          </div>
         </div>
       </header>
 
@@ -61,7 +79,7 @@ export function AppShell({ children, currentPath }: { children: React.ReactNode;
   )
 }
 
-export function ChatShell({ children, currentPath }: { children: React.ReactNode; currentPath: string }) {
+export async function ChatShell({ children, currentPath }: { children: React.ReactNode; currentPath: string }) {
   return (
     <div className="chat-app-shell">
       <header className="shell-header shell-header-compact">

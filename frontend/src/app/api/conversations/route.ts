@@ -1,18 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { fetchBackend } from '@/lib/backend'
+import { NextRequest } from 'next/server'
+import { proxyJson } from '@/lib/backend-proxy'
 
-export async function GET() {
-  const response = await fetchBackend('/api/conversations')
-  return NextResponse.json(await response.json(), { status: response.status })
+export async function GET(request: NextRequest) {
+  return proxyJson(request, '/api/conversations')
 }
 
 export async function POST(request: NextRequest) {
-  const body = await request.text()
-  const response = await fetchBackend('/api/conversations', {
-    method: 'POST',
-    body,
-    headers: { 'Content-Type': 'application/json' },
-  })
-
-  return NextResponse.json(await response.json(), { status: response.status })
+  return proxyJson(request, '/api/conversations', { method: 'POST', body: await request.text() })
 }

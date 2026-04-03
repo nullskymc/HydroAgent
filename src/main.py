@@ -21,7 +21,16 @@ from src.logger_config import logger
 from src.config import config
 from src.database.models import SessionLocal, init_db
 from src.api import router as api_router
+from src.routers.alert_router import router as alert_router
+from src.routers.analytics_router import router as analytics_router
+from src.routers.asset_router import router as asset_router
+from src.routers.auth_router import router as auth_router
+from src.routers.report_router import router as report_router
+from src.routers.user_router import router as user_router
 from src.services import bootstrap_default_zones
+from src.services.alert_service import ensure_alert_rules
+from src.services.asset_service import ensure_sensor_devices
+from src.services.auth_service import ensure_auth_seed
 
 # ============================================================
 #  FastAPI 应用配置
@@ -46,6 +55,12 @@ app.add_middleware(
 
 # 注册 API 路由
 app.include_router(api_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(user_router, prefix="/api")
+app.include_router(asset_router, prefix="/api")
+app.include_router(alert_router, prefix="/api")
+app.include_router(analytics_router, prefix="/api")
+app.include_router(report_router, prefix="/api")
 
 
 # ============================================================
@@ -64,11 +79,22 @@ async def startup_event():
         db = SessionLocal()
         try:
             bootstrap_default_zones(db)
+            ensure_sensor_devices(db)
+            ensure_auth_seed(db)
+            ensure_alert_rules(db)
         finally:
             db.close()
         logger.info(f"✅ 数据库初始化完成 ({config.DB_TYPE})")
     except Exception as e:
         logger.error(f"❌ 数据库初始化失败: {e}")
+
+    try:
+        from src.llm.persistence import get_hydro_persistence
+
+        await get_hydro_persistence().initialize()
+        logger.info("✅ LangGraph SQLite persistence 已初始化")
+    except Exception as e:
+        logger.error(f"❌ LangGraph persistence 初始化失败: {e}")
     
     # 异步预热 Agent（非阻塞）
     async def _warmup():
@@ -97,6 +123,12 @@ async def shutdown_event():
         from src.llm.langchain_agent import get_hydro_agent
         agent = get_hydro_agent()
         await agent.cleanup()
+    except Exception:
+        pass
+    try:
+        from src.llm.persistence import get_hydro_persistence
+
+        await get_hydro_persistence().close()
     except Exception:
         pass
     logger.info("👋 HydroAgent 已关闭")

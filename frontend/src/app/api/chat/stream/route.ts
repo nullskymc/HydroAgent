@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { AUTH_COOKIE_NAME } from '@/lib/auth'
 import { fetchBackend } from '@/lib/backend'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   const body = await request.text()
   const response = await fetchBackend('/api/chat', {
     method: 'POST',
     body,
+    authToken: request.cookies.get(AUTH_COOKIE_NAME)?.value || null,
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
@@ -16,12 +21,36 @@ export async function POST(request: NextRequest) {
     return new NextResponse(await response.text(), { status: response.status })
   }
 
-  return new NextResponse(response.body, {
+  const stream = new ReadableStream({
+    async start(controller) {
+      const reader = response.body!.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value) {
+            controller.enqueue(value)
+          }
+        }
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      } finally {
+        reader.releaseLock()
+      }
+    },
+    cancel() {
+      response.body?.cancel().catch(() => undefined)
+    },
+  })
+
+  return new NextResponse(stream, {
     status: response.status,
     headers: {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     },
   })
 }

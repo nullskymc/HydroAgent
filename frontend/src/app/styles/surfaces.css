@@ -467,6 +467,211 @@
   min-height: 720px;
 }
 
+.audit-record-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 720px;
+}
+
+.audit-record-nav,
+.audit-record-detail {
+  min-width: 0;
+}
+
+.audit-record-group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.audit-record-group-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
+}
+
+.audit-record-group-tab.is-active {
+  border-color: rgba(15, 118, 110, 0.32);
+  background: rgba(240, 253, 250, 0.92);
+}
+
+.audit-record-list,
+.audit-detail-panel,
+.audit-detail-sections {
+  display: grid;
+  gap: 12px;
+}
+
+.audit-record-item {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  text-align: left;
+}
+
+.audit-record-item.is-active {
+  border-color: rgba(15, 118, 110, 0.32);
+  box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.08);
+  background: rgba(247, 252, 250, 0.96);
+}
+
+.audit-record-item-head,
+.audit-detail-head,
+.audit-detail-title,
+.structured-json-section-head {
+  display: grid;
+  gap: 6px;
+}
+
+.audit-record-item-head strong,
+.audit-detail-title h3,
+.structured-json-section-head strong {
+  margin: 0;
+  font-size: 0.96rem;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.audit-record-item-head time,
+.audit-record-item p,
+.audit-record-meta span,
+.audit-detail-title p,
+.structured-json-section-head p,
+.structured-json-branch summary span:last-child,
+.structured-json-label,
+.structured-json-empty,
+.structured-json-empty-state {
+  margin: 0;
+  color: var(--foreground-soft);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.audit-record-meta,
+.audit-record-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.audit-detail-highlights,
+.audit-detail-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.audit-detail-highlight,
+.audit-detail-meta-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.audit-detail-highlight span,
+.audit-detail-meta-item span {
+  font-size: 0.76rem;
+  color: var(--foreground-faint);
+}
+
+.audit-detail-highlight strong,
+.audit-detail-meta-item strong {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.audit-detail-empty {
+  padding: 18px;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  color: var(--foreground-soft);
+}
+
+.structured-json-section {
+  display: grid;
+  gap: 10px;
+}
+
+.structured-json-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.structured-json-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.structured-json-row-block {
+  grid-template-columns: 1fr;
+}
+
+.structured-json-label {
+  font-weight: 600;
+}
+
+.structured-json-cell,
+.structured-json-value,
+.structured-json-children {
+  min-width: 0;
+}
+
+.structured-json-value {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.structured-json-branch {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+  overflow: hidden;
+}
+
+.structured-json-branch summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.structured-json-branch summary::-webkit-details-marker {
+  display: none;
+}
+
+.structured-json-children {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px;
+}
+
 .audit-console-list {
   display: grid;
   gap: 12px;
@@ -916,6 +1121,7 @@
   .history-stage-grid-bottom,
   .orchard-hero,
   .audit-hero,
+  .audit-record-layout,
   .settings-workspace {
     grid-template-columns: 1fr;
   }
@@ -958,6 +1164,9 @@
   .command-hero,
   .signal-grid,
   .console-form-grid,
+  .audit-detail-highlights,
+  .audit-detail-meta-grid,
+  .structured-json-row,
   .settings-preview-grid {
     grid-template-columns: 1fr;
   }

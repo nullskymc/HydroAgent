@@ -3,6 +3,7 @@ Tool argument normalization layer for HydroAgent MCP tools.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -10,12 +11,17 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.database.models import SessionLocal
 from src.services.irrigation_service import list_plans, list_zones
 
 logger = logging.getLogger("hydroagent.tool_parser")
+
+ACTIVE_CONVERSATION_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "hydro_active_conversation_id",
+    default=None,
+)
 
 _ZONE_TOOLS = {
     "query_sensor_data",
@@ -24,10 +30,6 @@ _ZONE_TOOLS = {
     "create_irrigation_plan",
     "control_irrigation",
     "recommend_irrigation_plan",
-    "execute_approved_plan",
-    "approve_irrigation_plan",
-    "reject_irrigation_plan",
-    "get_plan_status",
 }
 
 _PLAN_TOOLS = {
@@ -41,7 +43,7 @@ _PLAN_TOOLS = {
 class ParsedToolArguments(BaseModel):
     """Structured output from the parser sub-agent."""
 
-    canonical_args: dict[str, Any]
+    canonical_args: dict[str, Any] = Field(default_factory=dict)
     confidence: float = 0.0
     rationale: str = ""
 
@@ -51,7 +53,11 @@ class ToolArgumentParserAgent:
 
     def __init__(self, llm: ChatOpenAI | None = None):
         self._llm = llm
-        self._structured_llm = llm.with_structured_output(ParsedToolArguments) if llm else None
+        self._structured_llm = (
+            llm.with_structured_output(ParsedToolArguments, method="function_calling")
+            if llm
+            else None
+        )
         self._cache: dict[str, Any] = {}
 
     def normalize_sync(self, tool_name: str, tool_input: Any) -> Any:
@@ -117,7 +123,12 @@ class ToolArgumentParserAgent:
             return normalized
 
         candidate = dict(parsed.canonical_args or {})
-        resolved = self._normalize_locally(tool_name, candidate, catalog)
+        if not candidate:
+            self._cache[cache_key] = normalized
+            return normalized
+
+        merged_candidate = {**normalized, **candidate}
+        resolved = self._normalize_locally(tool_name, merged_candidate, catalog)
         final_result = resolved if self._is_catalog_safe(tool_name, resolved, catalog) else normalized
         self._cache[cache_key] = final_result
         return final_result
@@ -149,12 +160,18 @@ class ToolArgumentParserAgent:
 
     def _normalize_locally(self, tool_name: str, tool_input: dict[str, Any], catalog: dict[str, list[dict[str, str]]]) -> dict[str, Any]:
         normalized = dict(tool_input)
+        conversation_id = ACTIVE_CONVERSATION_ID.get()
 
-        if tool_name in _ZONE_TOOLS and "zone_id" in normalized:
+        if tool_name == "create_irrigation_plan" and conversation_id and not normalized.get("conversation_id"):
+            # 聊天线程内生成的计划需要自动回写当前 conversation_id，避免计划与官方 thread 脱钩。
+            normalized["conversation_id"] = conversation_id
+
+        if tool_name in _ZONE_TOOLS:
             raw_zone = str(normalized.get("zone_id") or "").strip()
-            resolved_zone = self._resolve_zone_id(raw_zone, catalog["zones"])
+            zone_reference = raw_zone or self._extract_zone_reference(normalized, catalog["zones"])
+            resolved_zone = self._resolve_zone_id(zone_reference, catalog["zones"])
             if resolved_zone:
-                # 先做本地确定性映射，拦住“2 -> zone_xxx”这类高频错误。
+                # 单代理模式下，zone_id 必须在真正调用工具前被补齐，避免再次出现空参数调用。
                 normalized["zone_id"] = resolved_zone
 
         if tool_name in _PLAN_TOOLS and "plan_id" in normalized:
@@ -191,9 +208,8 @@ class ToolArgumentParserAgent:
             if normalized_name == self._normalize_label(item["name"]):
                 return item["zone_id"]
 
-        ordinal_match = re.search(r"(\d+)$", normalized_name)
-        if ordinal_match:
-            ordinal = ordinal_match.group(1)
+        ordinal_matches = re.findall(r"\d+", normalized_name)
+        for ordinal in reversed(ordinal_matches):
             for item in zones:
                 if ordinal == item["ordinal"]:
                     return item["zone_id"]
@@ -221,6 +237,32 @@ class ToolArgumentParserAgent:
         text = re.sub(r"\s+", " ", text)
         text = text.replace("zone ", "分区 ")
         return text
+
+    def _extract_zone_reference(self, payload: Any, zones: list[dict[str, str]]) -> str:
+        candidates = self._collect_text_fragments(payload)
+        for candidate in candidates:
+            if self._resolve_zone_id(candidate, zones):
+                return candidate
+        return ""
+
+    def _collect_text_fragments(self, payload: Any) -> list[str]:
+        fragments: list[str] = []
+        self._collect_text_fragments_recursive(payload, fragments)
+        return fragments
+
+    def _collect_text_fragments_recursive(self, payload: Any, fragments: list[str]):
+        if isinstance(payload, str):
+            cleaned = payload.strip()
+            if cleaned:
+                fragments.append(cleaned)
+            return
+        if isinstance(payload, dict):
+            for value in payload.values():
+                self._collect_text_fragments_recursive(value, fragments)
+            return
+        if isinstance(payload, list):
+            for item in payload:
+                self._collect_text_fragments_recursive(item, fragments)
 
     def _build_cache_key(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         try:
@@ -261,6 +303,9 @@ class NormalizedToolProxy(BaseTool):
 def wrap_tool_registry(tool_registry: dict[str, Any], parser_agent: ToolArgumentParserAgent) -> dict[str, Any]:
     wrapped: dict[str, Any] = {}
     for name, tool in tool_registry.items():
+        if name not in (_ZONE_TOOLS | _PLAN_TOOLS):
+            wrapped[name] = tool
+            continue
         wrapped[name] = NormalizedToolProxy(
             name=name,
             description=getattr(tool, "description", ""),

@@ -16,12 +16,11 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from src.database.models import (
-    AgentDecisionLog,
-    ChatMessage,
-    ConversationSession,
     IrrigationLog,
     SessionLocal,
+    User,
 )
+from src.llm.persistence import get_hydro_persistence
 from src.services import (
     approve_plan,
     create_plan,
@@ -31,15 +30,10 @@ from src.services import (
     list_plans,
     list_zones,
     manual_override_control,
+    record_audit_event,
     reject_plan,
+    require_permission,
     summarize_system_irrigation,
-)
-from src.services.tool_trace_service import (
-    attach_tool_traces_to_messages,
-    create_trace_id,
-    list_tool_trace_payloads,
-    persist_tool_execution_event,
-    save_assistant_message,
 )
 
 logger = logging.getLogger("hydroagent.api")
@@ -94,60 +88,48 @@ def get_db():
 
 
 @router.get("/conversations")
-async def list_conversations(db: Session = Depends(get_db)):
-    sessions = db.query(ConversationSession).order_by(ConversationSession.updated_at.desc()).limit(50).all()
-    return {"conversations": [session.to_dict() for session in sessions]}
+async def list_conversations(_: User = Depends(require_permission("chat:view"))):
+    persistence = get_hydro_persistence()
+    return {"conversations": await persistence.list_conversations(limit=50)}
 
 
 @router.post("/conversations")
-async def create_conversation(req: CreateConversationRequest, db: Session = Depends(get_db)):
-    session = ConversationSession(session_id=str(uuid.uuid4()), title=req.title or "新对话")
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return {"conversation": session.to_dict()}
+async def create_conversation(req: CreateConversationRequest, _: User = Depends(require_permission("chat:view"))):
+    persistence = get_hydro_persistence()
+    session_id = str(uuid.uuid4())
+    conversation = await persistence.ensure_thread(session_id, title=req.title or "新对话")
+    return {"conversation": conversation}
 
 
 @router.get("/conversations/{session_id}")
-async def get_conversation(session_id: str, db: Session = Depends(get_db)):
-    session = db.query(ConversationSession).filter(ConversationSession.session_id == session_id).first()
-    if not session:
+async def get_conversation(session_id: str, _: User = Depends(require_permission("chat:view"))):
+    persistence = get_hydro_persistence()
+    payload = await persistence.get_conversation(session_id)
+    if not payload:
         raise HTTPException(status_code=404, detail="会话不存在")
-    messages = db.query(ChatMessage).filter(ChatMessage.conversation_id == session_id).order_by(ChatMessage.created_at).all()
-    return {"conversation": session.to_dict(), "messages": attach_tool_traces_to_messages(db, messages)}
+    return payload
 
 
 @router.delete("/conversations/{session_id}")
-async def delete_conversation(session_id: str, db: Session = Depends(get_db)):
-    session = db.query(ConversationSession).filter(ConversationSession.session_id == session_id).first()
-    if not session:
+async def delete_conversation(session_id: str, _: User = Depends(require_permission("chat:view"))):
+    persistence = get_hydro_persistence()
+    if not await persistence.thread_exists(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
-    db.delete(session)
-    db.commit()
+    await persistence.delete_thread(session_id)
     return {"success": True, "message": "会话已删除"}
 
 
 @router.get("/tool-traces")
-async def tool_traces(limit: int = 20, conversation_id: Optional[str] = None, db: Session = Depends(get_db)):
-    return {"tool_traces": list_tool_trace_payloads(db, limit=limit, conversation_id=conversation_id)}
+async def tool_traces(limit: int = 20, conversation_id: Optional[str] = None, _: User = Depends(require_permission("history:view"))):
+    persistence = get_hydro_persistence()
+    return {"tool_traces": await persistence.list_tool_traces(limit=limit, conversation_id=conversation_id)}
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, db: Session = Depends(get_db)):
-    session = db.query(ConversationSession).filter(ConversationSession.session_id == req.conversation_id).first()
-    if not session:
+async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view"))):
+    persistence = get_hydro_persistence()
+    if not await persistence.thread_exists(req.conversation_id):
         raise HTTPException(status_code=404, detail="会话不存在")
-
-    history = db.query(ChatMessage).filter(ChatMessage.conversation_id == req.conversation_id).order_by(ChatMessage.created_at).all()
-    messages = [{"role": message.role, "content": message.content or ""} for message in history if message.role in ("user", "assistant")]
-    messages.append({"role": "user", "content": req.message})
-
-    db.add(ChatMessage(conversation_id=req.conversation_id, role="user", content=req.message))
-    if session.message_count == 0:
-        session.title = req.message[:40] + ("..." if len(req.message) > 40 else "")
-    session.message_count = (session.message_count or 0) + 1
-    session.updated_at = datetime.datetime.utcnow()
-    db.commit()
 
     async def generate():
         from src.llm.langchain_agent import get_hydro_agent
@@ -157,35 +139,30 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
             yield f"data: {json.dumps({'type': 'text', 'content': '正在初始化 AI 引擎...'})}\n\n"
             await agent.initialize()
 
-        full_response_parts: list[str] = []
-        tool_calls_used: list[str] = []
-        trace_id = create_trace_id()
+        assistant_preview_parts: list[str] = []
+        trace_id = f"trace_{uuid.uuid4().hex[:12]}"
         step_index = 0
 
         try:
-            async for event in agent.chat_stream(messages, conversation_id=req.conversation_id):
+            async for event in agent.chat_stream(
+                [{"role": "user", "content": req.message}],
+                conversation_id=req.conversation_id,
+            ):
                 event_type = event.get("type")
                 if event_type == "text":
-                    full_response_parts.append(event.get("content", ""))
-                elif event_type == "tool_call":
-                    tool_calls_used.append(event.get("tool", ""))
-                elif event_type in {
-                    "plan_proposed",
-                    "plan_updated",
-                    "approval_requested",
-                    "approval_result",
-                    "execution_result",
-                    "subagent_handoff",
-                    "subagent_result",
-                }:
-                    full_response_parts.append(_event_to_summary_text(event))
-                step_index = _persist_tool_trace_event(
-                    db,
+                    assistant_preview_parts.append(event.get("content", ""))
+                trace_payload = _build_trace_event_payload(
                     conversation_id=req.conversation_id,
                     trace_id=trace_id,
                     step_index=step_index,
                     event=event,
                 )
+                if trace_payload:
+                    step_index += 1
+                    await persistence.record_trace_event(req.conversation_id, trace_payload)
+                decision_payload = _build_decision_event_payload(req.conversation_id, event)
+                if decision_payload:
+                    await persistence.record_decision_async(decision_payload, thread_id=req.conversation_id)
                 outbound_event = dict(event)
                 if event_type != "done":
                     outbound_event["trace_id"] = trace_id
@@ -197,15 +174,12 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
             yield f"data: {json.dumps({'type': 'error', 'content': f'出错：{exc}'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         finally:
-            full_response = "\n".join(part for part in full_response_parts if part).strip()
-            if full_response:
-                save_assistant_message(
-                    db,
-                    conversation_id=req.conversation_id,
-                    content=full_response,
-                    tools_used=tool_calls_used,
-                    trace_id=trace_id,
-                )
+            await persistence.record_chat_turn(
+                req.conversation_id,
+                trace_id=trace_id if step_index > 0 else None,
+                user_content=req.message,
+                assistant_content="".join(part for part in assistant_preview_parts if part).strip(),
+            )
 
     return StreamingResponse(
         generate(),
@@ -213,137 +187,202 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-def _event_to_summary_text(event: dict) -> str:
-    event_type = event.get("type")
-    if event_type in {"plan_proposed", "plan_updated", "approval_result", "execution_result"}:
-        plan = event.get("plan", {})
-        if not isinstance(plan, dict):
-            return ""
-        if event_type == "plan_proposed":
-            return (
-                f"已生成计划 {plan.get('plan_id')}，分区 {plan.get('zone_name') or plan.get('zone_id')}，"
-                f"动作 {plan.get('proposed_action')}，风险 {plan.get('risk_level')}。"
-            )
-        if event_type == "plan_updated":
-            return f"计划 {plan.get('plan_id')} 已更新，当前状态 {plan.get('status')}。"
-        if event_type == "approval_result":
-            return f"计划 {plan.get('plan_id')} 审批结果：{event.get('decision')}。"
-        if event_type == "execution_result":
-            return f"计划 {plan.get('plan_id')} 已执行，执行状态 {plan.get('execution_status')}。"
-    if event_type == "approval_requested":
-        details = event.get("details", {})
-        if isinstance(details, dict):
-            return f"执行前需要审批：分区 {details.get('zone_id')}，原因：{'、'.join(details.get('reasons', [])) or 'start 操作需要审批'}。"
-    if event_type == "subagent_handoff":
-        return f"已委派给子代理 {event.get('subagent')}，目标分区 {event.get('zone_id') or '待识别'}。"
-    if event_type == "subagent_result":
-        return f"子代理 {event.get('subagent')} 已完成，结果摘要：{event.get('result_preview') or '无'}。"
-    return ""
-
-
-def _persist_tool_trace_event(
-    db: Session,
+def _build_trace_event_payload(
     *,
     conversation_id: str,
     trace_id: str,
     step_index: int,
     event: dict,
-) -> int:
+) -> dict | None:
     event_type = event.get("type")
     if event_type not in {"tool_call", "tool_result", "subagent_handoff", "subagent_result"}:
-        return step_index
+        return None
 
     next_index = step_index + 1
+    created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     if event_type == "tool_call":
-        persist_tool_execution_event(
-            db,
-            trace_id=trace_id,
-            conversation_id=conversation_id,
-            step_index=next_index,
-            event_type="tool_start",
-            status="running",
-            run_id=event.get("run_id"),
-            tool_name=event.get("tool"),
-            zone_id=event.get("zone_id"),
-            plan_id=event.get("plan_id"),
-            input_args=_coerce_event_object(event.get("args")),
-            normalized_args=_coerce_normalized_args(event),
-        )
-        return next_index
+        tool_name = str(event.get("tool") or "未知工具")
+        source = _format_agent_source(event)
+        return {
+            "event_id": f"traceevt_{uuid.uuid4().hex[:12]}",
+            "trace_id": trace_id,
+            "conversation_id": conversation_id,
+            "step_index": next_index,
+            "event_type": "tool_call",
+            "status": "running",
+            "tool_name": tool_name,
+            "subagent_name": None,
+            "zone_id": event.get("zone_id"),
+            "plan_id": event.get("plan_id"),
+            "input_preview": _preview_text(event.get("normalized_args") or event.get("args"), limit=180),
+            "output_preview": None,
+            "duration_ms": None,
+            "agent_name": event.get("agent_name"),
+            "node_name": event.get("node_name"),
+            "layer": "tool",
+            "title": "工具调用",
+            "detail": f"{source}{tool_name}",
+            "created_at": created_at,
+        }
 
     if event_type == "tool_result":
-        result = event.get("result")
-        output_payload, payload_truncated = _coerce_output_payload(result)
-        persist_tool_execution_event(
-            db,
-            trace_id=trace_id,
-            conversation_id=conversation_id,
-            step_index=next_index,
-            event_type="tool_end",
-            status="success",
-            run_id=event.get("run_id"),
-            tool_name=event.get("tool"),
-            zone_id=event.get("zone_id"),
-            plan_id=event.get("plan_id"),
-            input_args=_coerce_event_object(event.get("args")),
-            normalized_args=_coerce_normalized_args(event),
-            output_payload=output_payload,
-            output_preview=str(event.get("output_preview") or _preview_text(result, limit=280) or event.get("tool") or ""),
-            duration_ms=_coerce_int(event.get("duration_ms")),
-            payload_truncated=payload_truncated,
-        )
-        return next_index
+        tool_name = str(event.get("tool") or "未知工具")
+        source = _format_agent_source(event)
+        return {
+            "event_id": f"traceevt_{uuid.uuid4().hex[:12]}",
+            "trace_id": trace_id,
+            "conversation_id": conversation_id,
+            "step_index": next_index,
+            "event_type": "tool_result",
+            "status": "success",
+            "tool_name": tool_name,
+            "subagent_name": None,
+            "zone_id": event.get("zone_id"),
+            "plan_id": event.get("plan_id"),
+            "input_preview": _preview_text(event.get("normalized_args") or event.get("args"), limit=180),
+            "output_preview": str(event.get("output_preview") or _preview_text(event.get("result"), limit=280) or ""),
+            "duration_ms": _coerce_int(event.get("duration_ms")),
+            "agent_name": event.get("agent_name"),
+            "node_name": event.get("node_name"),
+            "layer": "tool",
+            "title": "工具返回",
+            "detail": f"{source}{event.get('output_preview') or f'{tool_name} 已返回结构化结果'}",
+            "created_at": created_at,
+        }
 
     if event_type == "subagent_handoff":
-        persist_tool_execution_event(
-            db,
-            trace_id=trace_id,
-            conversation_id=conversation_id,
-            step_index=next_index,
-            event_type="subagent_handoff",
-            status="running",
-            run_id=event.get("run_id"),
-            subagent_name=event.get("subagent"),
-            zone_id=event.get("zone_id"),
-            plan_id=event.get("plan_id"),
-            output_preview=f"{event.get('zone_id') or '待识别分区'} · {event.get('task_description') or '正在准备任务说明'}",
+        subagent = str(event.get("subagent") or "subagent")
+        return {
+            "event_id": f"traceevt_{uuid.uuid4().hex[:12]}",
+            "trace_id": trace_id,
+            "conversation_id": conversation_id,
+            "step_index": next_index,
+            "event_type": "subagent_handoff",
+            "status": "running",
+            "tool_name": None,
+            "subagent_name": subagent,
+            "zone_id": event.get("zone_id"),
+            "plan_id": event.get("plan_id"),
+            "input_preview": None,
+            "output_preview": str(event.get("task_description") or ""),
+            "duration_ms": None,
+            "agent_name": event.get("agent_name"),
+            "node_name": event.get("node_name"),
+            "layer": "subagent",
+            "title": f"委派 {subagent}",
+            "detail": f"{event.get('zone_id') or '待识别分区'} · {event.get('task_description') or '正在准备任务说明'}",
+            "created_at": created_at,
+        }
+
+    subagent = str(event.get("subagent") or "subagent")
+    return {
+        "event_id": f"traceevt_{uuid.uuid4().hex[:12]}",
+        "trace_id": trace_id,
+        "conversation_id": conversation_id,
+        "step_index": next_index,
+        "event_type": "subagent_result",
+        "status": "success",
+        "tool_name": None,
+        "subagent_name": subagent,
+        "zone_id": event.get("zone_id"),
+        "plan_id": event.get("plan_id"),
+        "input_preview": None,
+        "output_preview": str(event.get("result_preview") or "子代理已完成处理"),
+        "duration_ms": None,
+        "agent_name": event.get("agent_name"),
+        "node_name": event.get("node_name"),
+        "layer": "subagent",
+        "title": f"{subagent} 已返回",
+        "detail": str(event.get("result_preview") or "子代理已完成处理"),
+        "created_at": created_at,
+    }
+
+
+def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | None:
+    event_type = event.get("type")
+    created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    if event_type in {"subagent_handoff", "subagent_result"}:
+        subagent = str(event.get("subagent") or "unknown")
+        status = "started" if event_type == "subagent_handoff" else "completed"
+        reasoning = f"Supervisor {'delegated work to' if status == 'started' else 'received completion from'} {subagent}."
+        return {
+            "decision_id": f"decision_{uuid.uuid4().hex[:12]}",
+            "trigger": "chat",
+            "zone_id": event.get("zone_id"),
+            "plan_id": event.get("plan_id"),
+            "input_context": {
+                "conversation_id": conversation_id,
+                "event": event_type,
+                "task_description": event.get("task_description"),
+            },
+            "reasoning_chain": reasoning,
+            "tools_used": ["task"],
+            "decision_result": {
+                "subagent": subagent,
+                "status": status,
+                "result_preview": event.get("result_preview"),
+            },
+            "reflection_notes": "Captured from official LangGraph streaming updates.",
+            "effectiveness_score": None,
+            "created_at": created_at,
+        }
+
+    if event_type == "approval_requested":
+        details = event.get("details") if isinstance(event.get("details"), dict) else {}
+        return {
+            "decision_id": f"decision_{uuid.uuid4().hex[:12]}",
+            "trigger": "chat",
+            "zone_id": details.get("zone_id"),
+            "plan_id": details.get("plan_id"),
+            "input_context": {"conversation_id": conversation_id, "event": event_type},
+            "reasoning_chain": "Agent blocked a start-like action because approval is required before execution.",
+            "tools_used": [str(event.get("tool") or "control_irrigation")],
+            "decision_result": {
+                "status": "approval_requested",
+                "details": details,
+            },
+            "reflection_notes": "Approval boundary enforced before irrigation execution.",
+            "effectiveness_score": None,
+            "created_at": created_at,
+        }
+
+    if event_type in {"plan_proposed", "approval_result", "execution_result"}:
+        plan = event.get("plan") if isinstance(event.get("plan"), dict) else {}
+        event_status = (
+            "proposed"
+            if event_type == "plan_proposed"
+            else str(event.get("decision") or plan.get("execution_status") or event_type)
         )
-        return next_index
+        return {
+            "decision_id": f"decision_{uuid.uuid4().hex[:12]}",
+            "trigger": "chat",
+            "zone_id": plan.get("zone_id"),
+            "plan_id": plan.get("plan_id"),
+            "input_context": {"conversation_id": conversation_id, "event": event_type},
+            "reasoning_chain": {
+                "plan_proposed": "Agent generated a structured irrigation plan after collecting evidence.",
+                "approval_result": "Agent recorded an approval decision on an irrigation plan.",
+                "execution_result": "Agent recorded an irrigation execution result.",
+            }[event_type],
+            "tools_used": [
+                {
+                    "plan_proposed": "create_irrigation_plan",
+                    "approval_result": "approve_or_reject_plan",
+                    "execution_result": "execute_approved_plan",
+                }[event_type]
+            ],
+            "decision_result": {
+                "status": event_status,
+                "risk_level": plan.get("risk_level"),
+                "proposed_action": plan.get("proposed_action"),
+            },
+            "reflection_notes": str(plan.get("reasoning_summary") or "Captured from official LangGraph streaming updates."),
+            "effectiveness_score": None,
+            "created_at": created_at,
+        }
 
-    persist_tool_execution_event(
-        db,
-        trace_id=trace_id,
-        conversation_id=conversation_id,
-        step_index=next_index,
-        event_type="subagent_result",
-        status="success",
-        run_id=event.get("run_id"),
-        subagent_name=event.get("subagent"),
-        zone_id=event.get("zone_id"),
-        plan_id=event.get("plan_id"),
-        output_preview=str(event.get("result_preview") or "子代理已完成处理"),
-    )
-    return next_index
-
-
-def _coerce_event_object(value):
-    return value if isinstance(value, dict) else None
-
-
-def _coerce_normalized_args(event: dict):
-    normalized = event.get("normalized_args")
-    if not isinstance(normalized, dict):
-        return None
-    if normalized == event.get("args"):
-        return None
-    return normalized
-
-
-def _coerce_output_payload(result):
-    if isinstance(result, (dict, list)):
-        return result, False
-    text = str(result or "")
-    return None, len(text) > 800
+    return None
 
 
 def _preview_text(value, limit: int = 280):
@@ -363,13 +402,20 @@ def _coerce_int(value):
         return None
 
 
+def _format_agent_source(event: dict) -> str:
+    agent_name = event.get("agent_name")
+    if isinstance(agent_name, str) and agent_name and agent_name != "hydro-supervisor":
+        return f"{agent_name} · "
+    return ""
+
+
 @router.get("/zones")
-async def zones(db: Session = Depends(get_db)):
+async def zones(db: Session = Depends(get_db), _: User = Depends(require_permission("assets:view"))):
     return {"zones": [zone.to_dict() for zone in list_zones(db)]}
 
 
 @router.get("/zones/{zone_id}/status")
-async def zone_status(zone_id: str, db: Session = Depends(get_db)):
+async def zone_status(zone_id: str, db: Session = Depends(get_db), _: User = Depends(require_permission("assets:view"))):
     try:
         return get_zone_status(db, zone_id)
     except ValueError as exc:
@@ -377,12 +423,16 @@ async def zone_status(zone_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/plans")
-async def plans(limit: int = 20, db: Session = Depends(get_db)):
+async def plans(limit: int = 20, db: Session = Depends(get_db), _: User = Depends(require_permission("operations:view"))):
     return {"plans": [plan.to_dict() for plan in list_plans(db, limit=limit)]}
 
 
 @router.post("/plans/generate")
-async def generate_plan(req: PlanGenerateRequest, db: Session = Depends(get_db)):
+async def generate_plan(
+    req: PlanGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("plans:create")),
+):
     try:
         plan = create_plan(
             db,
@@ -393,11 +443,19 @@ async def generate_plan(req: PlanGenerateRequest, db: Session = Depends(get_db))
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    record_audit_event(
+        db,
+        actor=current_user.username,
+        event_type="plan.generate",
+        object_type="plan",
+        object_id=plan.plan_id,
+        details={"zone_id": req.zone_id, "trigger": req.trigger},
+    )
     return {"plan": plan.to_dict()}
 
 
 @router.get("/plans/{plan_id}")
-async def get_plan(plan_id: str, db: Session = Depends(get_db)):
+async def get_plan(plan_id: str, db: Session = Depends(get_db), _: User = Depends(require_permission("operations:view"))):
     plan = get_plan_by_id(db, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="计划不存在")
@@ -405,34 +463,72 @@ async def get_plan(plan_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/plans/{plan_id}/approve")
-async def approve_plan_endpoint(plan_id: str, req: PlanDecisionRequest, db: Session = Depends(get_db)):
+async def approve_plan_endpoint(
+    plan_id: str,
+    req: PlanDecisionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("plans:approve")),
+):
     try:
         plan = approve_plan(db, plan_id, actor=req.actor, comment=req.comment)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        db,
+        actor=current_user.username,
+        event_type="plan.approve",
+        object_type="plan",
+        object_id=plan.plan_id,
+        comment=req.comment,
+    )
     return {"plan": plan.to_dict()}
 
 
 @router.post("/plans/{plan_id}/reject")
-async def reject_plan_endpoint(plan_id: str, req: PlanDecisionRequest, db: Session = Depends(get_db)):
+async def reject_plan_endpoint(
+    plan_id: str,
+    req: PlanDecisionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("plans:approve")),
+):
     try:
         plan = reject_plan(db, plan_id, actor=req.actor, comment=req.comment)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        db,
+        actor=current_user.username,
+        event_type="plan.reject",
+        object_type="plan",
+        object_id=plan.plan_id,
+        comment=req.comment,
+    )
     return {"plan": plan.to_dict()}
 
 
 @router.post("/plans/{plan_id}/execute")
-async def execute_plan_endpoint(plan_id: str, req: PlanExecuteRequest, db: Session = Depends(get_db)):
+async def execute_plan_endpoint(
+    plan_id: str,
+    req: PlanExecuteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("plans:execute")),
+):
     try:
         plan = execute_plan(db, plan_id, actor=req.actor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit_event(
+        db,
+        actor=current_user.username,
+        event_type="plan.execute",
+        object_type="plan",
+        object_id=plan.plan_id,
+    )
     return {"plan": plan.to_dict()}
 
 
 @router.get("/sensors/current")
-async def get_current_sensors(db: Session = Depends(get_db)):
+async def get_current_sensors(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
     zones_payload = []
     averages = {"soil_moisture": 0.0, "temperature": 0.0, "light_intensity": 0.0, "rainfall": 0.0}
     zones = list_zones(db)
@@ -452,7 +548,7 @@ async def get_current_sensors(db: Session = Depends(get_db)):
 
 
 @router.get("/weather")
-async def get_weather(db: Session = Depends(get_db)):
+async def get_weather(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
     zones = list_zones(db)
     zone = zones[0]
     status = get_zone_status(db, zone.zone_id)
@@ -471,22 +567,34 @@ async def get_weather(db: Session = Depends(get_db)):
 
 
 @router.get("/irrigation/status")
-async def get_irrigation_status(db: Session = Depends(get_db)):
+async def get_irrigation_status(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
     return summarize_system_irrigation(db)
 
 
 @router.post("/irrigation/control")
-async def control_irrigation(req: IrrigationControlRequest, db: Session = Depends(get_db)):
+async def control_irrigation(
+    req: IrrigationControlRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("plans:execute")),
+):
     try:
         result = manual_override_control(db, req.action, duration_minutes=req.duration_minutes or 30)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     result["state"] = summarize_system_irrigation(db)
+    record_audit_event(
+        db,
+        actor=current_user.username,
+        event_type="irrigation.manual_override",
+        object_type="system",
+        object_id=req.action,
+        details={"duration_minutes": req.duration_minutes},
+    )
     return result
 
 
 @router.get("/irrigation/logs")
-async def get_irrigation_logs(limit: int = 20, db: Session = Depends(get_db)):
+async def get_irrigation_logs(limit: int = 20, db: Session = Depends(get_db), _: User = Depends(require_permission("history:view"))):
     logs = db.query(IrrigationLog).order_by(desc(IrrigationLog.created_at)).limit(limit).all()
     return {
         "logs": [
@@ -509,29 +617,41 @@ async def get_irrigation_logs(limit: int = 20, db: Session = Depends(get_db)):
 
 
 @router.get("/decisions")
-async def get_decisions(limit: int = 20, db: Session = Depends(get_db)):
-    logs = db.query(AgentDecisionLog).order_by(AgentDecisionLog.created_at.desc()).limit(limit).all()
-    return {"decisions": [log.to_dict() for log in logs]}
+async def get_decisions(limit: int = 20, _: User = Depends(require_permission("history:view"))):
+    persistence = get_hydro_persistence()
+    return {"decisions": await persistence.list_decisions(limit=limit)}
 
 
 @router.get("/settings")
-async def get_settings():
+async def get_settings(_: User = Depends(require_permission("settings:view"))):
     from src.config import config
 
     return config.get_runtime_settings()
 
 
 @router.put("/settings")
-async def update_settings(req: SettingsUpdateRequest):
+async def update_settings(
+    req: SettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("settings:manage")),
+):
     from src.config import config
 
     updates = req.dict(exclude_none=True)
     settings = config.update_runtime_settings(updates)
+    record_audit_event(
+        db,
+        actor=current_user.username,
+        event_type="settings.update",
+        object_type="config",
+        object_id="runtime",
+        details=updates,
+    )
     return {"success": True, "settings": settings}
 
 
 @router.get("/status")
-async def get_system_status(db: Session = Depends(get_db)):
+async def get_system_status(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
     from src.llm.langchain_agent import get_hydro_agent
 
     agent = get_hydro_agent()

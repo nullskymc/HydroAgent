@@ -86,8 +86,10 @@ button {
 .chat-app-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 100dvh;
   padding: 6px;
+  overflow: hidden;
 }
 
 .shell-header {
@@ -123,6 +125,7 @@ button {
 .chat-app-main {
   min-height: 0;
   padding-top: 6px;
+  overflow: hidden;
 }
 
 .page-panel {

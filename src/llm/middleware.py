@@ -41,17 +41,23 @@ class ReflectionMiddleware:
     def _persist_reflection(self, reflection: dict):
         """将反思记录持久化到数据库"""
         try:
-            from src.database.models import SessionLocal, AgentDecisionLog
-            db = SessionLocal()
-            log = AgentDecisionLog(
-                trigger="chat",
-                tools_used=[reflection["tool"]],
-                decision_result={"action": reflection["action"]},
-                reflection_notes=reflection["reflection"],
+            from src.llm.persistence import get_hydro_persistence
+
+            get_hydro_persistence().record_decision_sync(
+                {
+                    "decision_id": f"decision_reflect_{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                    "trigger": "chat",
+                    "zone_id": None,
+                    "plan_id": None,
+                    "input_context": {"tool": reflection["tool"]},
+                    "reasoning_chain": "ReflectionMiddleware captured a post-execution note.",
+                    "tools_used": [reflection["tool"]],
+                    "decision_result": {"action": reflection["action"]},
+                    "reflection_notes": reflection["reflection"],
+                    "effectiveness_score": None,
+                    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                }
             )
-            db.add(log)
-            db.commit()
-            db.close()
         except Exception as e:
             logger.warning(f"[ReflectionMiddleware] 持久化失败: {e}")
 

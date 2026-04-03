@@ -17,8 +17,6 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
-    inspect,
-    text,
 )
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -96,12 +94,100 @@ class User(Base, BaseModel):
     username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(128), nullable=False)
     email = Column(String(100), unique=True)
+    display_name = Column(String(100))
+    phone = Column(String(30))
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     last_login = Column(DateTime)
+    password_changed_at = Column(DateTime)
+    created_by = Column(String(100))
+
+    role_assignments = relationship("UserRoleAssignment", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "display_name": self.display_name,
+            "phone": self.phone,
+            "is_active": self.is_active,
+            "is_admin": self.is_admin,
+            "created_by": self.created_by,
+            "last_login": self.last_login.isoformat() if self.last_login else None,
+            "password_changed_at": self.password_changed_at.isoformat() if self.password_changed_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Role(Base, BaseModel):
+    """角色表"""
+
+    role_key = Column(String(50), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    is_system = Column(Boolean, default=True)
+
+    permissions = relationship("Permission", secondary="rolepermissionassignment", back_populates="roles")
+    user_assignments = relationship("UserRoleAssignment", back_populates="role", cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "role_key": self.role_key,
+            "name": self.name,
+            "description": self.description,
+            "is_system": self.is_system,
+            "permissions": [permission.permission_key for permission in self.permissions],
+        }
+
+
+class Permission(Base, BaseModel):
+    """权限表"""
+
+    permission_key = Column(String(80), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    category = Column(String(50), default="general")
+
+    roles = relationship("Role", secondary="rolepermissionassignment", back_populates="permissions")
+
+    def to_dict(self):
+        return {
+            "permission_key": self.permission_key,
+            "name": self.name,
+            "description": self.description,
+            "category": self.category,
+        }
+
+
+class RolePermissionAssignment(Base, BaseModel):
+    """角色与权限映射"""
+
+    role_id = Column(Integer, ForeignKey("role.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission_id = Column(Integer, ForeignKey("permission.id", ondelete="CASCADE"), nullable=False, index=True)
+
+
+class UserRoleAssignment(Base, BaseModel):
+    """用户与角色映射"""
+
+    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    role_id = Column(Integer, ForeignKey("role.id", ondelete="CASCADE"), nullable=False, index=True)
+    assigned_by = Column(String(100))
+
+    user = relationship("User", back_populates="role_assignments")
+    role = relationship("Role", back_populates="user_assignments")
+
+    def to_dict(self):
+        return {
+            "user_id": self.user_id,
+            "role_id": self.role_id,
+            "assigned_by": self.assigned_by,
+            "role_key": self.role.role_key if self.role else None,
+        }
 
 
 class Zone(Base, BaseModel):
@@ -119,6 +205,7 @@ class Zone(Base, BaseModel):
     actuators = relationship("Actuator", back_populates="zone", cascade="all, delete-orphan")
     sensor_bindings = relationship("ZoneSensorBinding", back_populates="zone", cascade="all, delete-orphan")
     plans = relationship("IrrigationPlan", back_populates="zone")
+    alerts = relationship("AlertEvent", back_populates="zone")
 
     def __repr__(self):
         return f"<Zone(zone_id='{self.zone_id}', name='{self.name}')>"
@@ -134,6 +221,7 @@ class Zone(Base, BaseModel):
             "is_enabled": self.is_enabled,
             "notes": self.notes,
             "sensor_ids": [binding.sensor_id for binding in self.sensor_bindings],
+            "sensor_devices": [binding.to_dict() for binding in self.sensor_bindings],
             "actuators": [actuator.to_dict() for actuator in self.actuators],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -151,9 +239,14 @@ class Actuator(Base, BaseModel):
     capabilities = Column(JSON, default=dict)
     is_enabled = Column(Boolean, default=True)
     last_command_at = Column(DateTime)
+    serial_number = Column(String(100))
+    firmware_version = Column(String(50))
+    health_status = Column(String(30), default="healthy")
+    last_seen_at = Column(DateTime)
 
     zone = relationship("Zone", back_populates="actuators")
     plans = relationship("IrrigationPlan", back_populates="actuator")
+    alerts = relationship("AlertEvent", back_populates="actuator")
 
     def __repr__(self):
         return f"<Actuator(actuator_id='{self.actuator_id}', zone_id='{self.zone_id}', status='{self.status}')>"
@@ -168,6 +261,42 @@ class Actuator(Base, BaseModel):
             "capabilities": self.capabilities or {},
             "is_enabled": self.is_enabled,
             "last_command_at": self.last_command_at.isoformat() if self.last_command_at else None,
+            "serial_number": self.serial_number,
+            "firmware_version": self.firmware_version,
+            "health_status": self.health_status,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+        }
+
+
+class SensorDevice(Base, BaseModel):
+    """传感器资产"""
+
+    sensor_device_id = Column(String(50), unique=True, nullable=False, index=True, default=lambda: f"sensor_{uuid.uuid4().hex[:10]}")
+    sensor_id = Column(String(50), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    model = Column(String(100))
+    location = Column(String(100))
+    status = Column(String(30), default="online")
+    is_enabled = Column(Boolean, default=True)
+    last_seen_at = Column(DateTime)
+    calibration_due_at = Column(DateTime)
+    notes = Column(Text)
+
+    zone_bindings = relationship("ZoneSensorBinding", back_populates="sensor_device")
+    alerts = relationship("AlertEvent", back_populates="sensor_device")
+
+    def to_dict(self):
+        return {
+            "sensor_device_id": self.sensor_device_id,
+            "sensor_id": self.sensor_id,
+            "name": self.name,
+            "model": self.model,
+            "location": self.location,
+            "status": self.status,
+            "is_enabled": self.is_enabled,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+            "calibration_due_at": self.calibration_due_at.isoformat() if self.calibration_due_at else None,
+            "notes": self.notes,
         }
 
 
@@ -176,10 +305,12 @@ class ZoneSensorBinding(Base, BaseModel):
 
     zone_id = Column(String(50), ForeignKey("zone.zone_id", ondelete="CASCADE"), index=True, nullable=False)
     sensor_id = Column(String(50), nullable=False, index=True)
+    sensor_device_id = Column(String(50), ForeignKey("sensordevice.sensor_device_id", ondelete="SET NULL"), index=True)
     role = Column(String(50), default="primary")
     is_enabled = Column(Boolean, default=True)
 
     zone = relationship("Zone", back_populates="sensor_bindings")
+    sensor_device = relationship("SensorDevice", back_populates="zone_bindings")
 
     def __repr__(self):
         return f"<ZoneSensorBinding(zone_id='{self.zone_id}', sensor_id='{self.sensor_id}')>"
@@ -188,64 +319,10 @@ class ZoneSensorBinding(Base, BaseModel):
         return {
             "zone_id": self.zone_id,
             "sensor_id": self.sensor_id,
+            "sensor_device_id": self.sensor_device_id,
             "role": self.role,
             "is_enabled": self.is_enabled,
-        }
-
-
-class ConversationSession(Base, BaseModel):
-    """对话会话"""
-
-    session_id = Column(String(50), unique=True, index=True, default=lambda: str(uuid.uuid4()))
-    title = Column(String(200), default="新对话")
-    message_count = Column(Integer, default=0)
-
-    messages = relationship(
-        "ChatMessage",
-        back_populates="conversation",
-        cascade="all, delete-orphan",
-        order_by="ChatMessage.created_at",
-    )
-
-    def __repr__(self):
-        return f"<ConversationSession(session_id='{self.session_id}', title='{self.title}')>"
-
-    def to_dict(self):
-        return {
-            "session_id": self.session_id,
-            "title": self.title,
-            "message_count": self.message_count,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
-class ChatMessage(Base, BaseModel):
-    """对话消息"""
-
-    conversation_id = Column(String(50), ForeignKey("conversationsession.session_id", ondelete="CASCADE"), index=True)
-    role = Column(String(20), nullable=False)
-    content = Column(Text)
-    trace_id = Column(String(50), index=True)
-    tool_calls = Column(JSON)
-    tool_name = Column(String(100))
-    tool_call_id = Column(String(100))
-
-    conversation = relationship("ConversationSession", back_populates="messages")
-
-    def __repr__(self):
-        return f"<ChatMessage(id={self.id}, role='{self.role}', conversation_id='{self.conversation_id}')>"
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "role": self.role,
-            "content": self.content,
-            "trace_id": self.trace_id,
-            "tool_calls": self.tool_calls,
-            "tool_name": self.tool_name,
-            "tool_call_id": self.tool_call_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "sensor_name": self.sensor_device.name if self.sensor_device else None,
         }
 
 
@@ -255,7 +332,7 @@ class IrrigationPlan(Base, BaseModel):
     plan_id = Column(String(50), unique=True, index=True, default=lambda: f"plan_{uuid.uuid4().hex[:12]}")
     zone_id = Column(String(50), ForeignKey("zone.zone_id", ondelete="SET NULL"), index=True)
     actuator_id = Column(String(50), ForeignKey("actuator.actuator_id", ondelete="SET NULL"), index=True)
-    conversation_id = Column(String(50), ForeignKey("conversationsession.session_id", ondelete="SET NULL"), index=True)
+    conversation_id = Column(String(50), index=True)
     trigger = Column(String(20), default="manual")
     status = Column(String(30), default="draft")
     approval_status = Column(String(30), default="not_required")
@@ -279,6 +356,7 @@ class IrrigationPlan(Base, BaseModel):
     actuator = relationship("Actuator", back_populates="plans")
     approvals = relationship("PlanApproval", back_populates="plan", cascade="all, delete-orphan")
     execution_events = relationship("PlanExecutionEvent", back_populates="plan", cascade="all, delete-orphan")
+    alerts = relationship("AlertEvent", back_populates="plan")
 
     def __repr__(self):
         return f"<IrrigationPlan(plan_id='{self.plan_id}', zone_id='{self.zone_id}', status='{self.status}')>"
@@ -368,85 +446,102 @@ class PlanExecutionEvent(Base, BaseModel):
         }
 
 
-class AgentDecisionLog(Base, BaseModel):
-    """智能体决策审计日志"""
+class AlertRule(Base, BaseModel):
+    """告警规则"""
 
-    decision_id = Column(String(50), unique=True, index=True, default=lambda: str(uuid.uuid4()))
-    trigger = Column(String(20), default="manual")
-    zone_id = Column(String(50), index=True)
-    plan_id = Column(String(50), index=True)
-    input_context = Column(JSON)
-    reasoning_chain = Column(Text)
-    tools_used = Column(JSON)
-    decision_result = Column(JSON)
-    reflection_notes = Column(Text)
-    effectiveness_score = Column(Float)
-
-    def __repr__(self):
-        return f"<AgentDecisionLog(decision_id='{self.decision_id}', trigger='{self.trigger}')>"
+    rule_key = Column(String(50), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    severity = Column(String(20), default="medium")
+    is_enabled = Column(Boolean, default=True)
+    config = Column(JSON, default=dict)
 
     def to_dict(self):
         return {
-            "decision_id": self.decision_id,
-            "trigger": self.trigger,
-            "zone_id": self.zone_id,
-            "plan_id": self.plan_id,
-            "input_context": self.input_context,
-            "reasoning_chain": self.reasoning_chain,
-            "tools_used": self.tools_used,
-            "decision_result": self.decision_result,
-            "reflection_notes": self.reflection_notes,
-            "effectiveness_score": self.effectiveness_score,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "rule_key": self.rule_key,
+            "name": self.name,
+            "description": self.description,
+            "severity": self.severity,
+            "is_enabled": self.is_enabled,
+            "config": self.config or {},
         }
 
 
-class ToolExecutionEvent(Base, BaseModel):
-    """逐步记录工具调用与子代理委派事件，用于审计与回放。"""
+class AlertEvent(Base, BaseModel):
+    """告警事件"""
 
-    event_id = Column(String(50), unique=True, index=True, default=lambda: f"traceevt_{uuid.uuid4().hex[:12]}")
-    trace_id = Column(String(50), index=True, nullable=False)
-    conversation_id = Column(String(50), ForeignKey("conversationsession.session_id", ondelete="CASCADE"), index=True)
-    run_id = Column(String(100), index=True)
-    step_index = Column(Integer, nullable=False, default=0)
-    event_type = Column(String(50), nullable=False)
-    status = Column(String(30), nullable=False, default="running")
-    tool_name = Column(String(100))
-    subagent_name = Column(String(100))
-    zone_id = Column(String(50), index=True)
-    plan_id = Column(String(50), index=True)
-    input_args = Column(JSON)
-    normalized_args = Column(JSON)
-    output_payload = Column(JSON)
-    output_preview = Column(Text)
-    error_message = Column(Text)
-    duration_ms = Column(Integer)
-    payload_truncated = Column(Boolean, default=False)
+    alert_id = Column(String(50), unique=True, nullable=False, index=True, default=lambda: f"alert_{uuid.uuid4().hex[:12]}")
+    rule_key = Column(String(50), ForeignKey("alertrule.rule_key", ondelete="SET NULL"), index=True)
+    severity = Column(String(20), default="medium")
+    status = Column(String(30), default="open")
+    title = Column(String(150), nullable=False)
+    message = Column(Text, nullable=False)
+    zone_id = Column(String(50), ForeignKey("zone.zone_id", ondelete="SET NULL"), index=True)
+    sensor_device_id = Column(String(50), ForeignKey("sensordevice.sensor_device_id", ondelete="SET NULL"), index=True)
+    actuator_id = Column(String(50), ForeignKey("actuator.actuator_id", ondelete="SET NULL"), index=True)
+    plan_id = Column(String(50), ForeignKey("irrigationplan.plan_id", ondelete="SET NULL"), index=True)
+    object_type = Column(String(50))
+    object_id = Column(String(50))
+    assignee = Column(String(100))
+    acknowledged_at = Column(DateTime)
+    resolved_at = Column(DateTime)
+    context = Column(JSON, default=dict)
 
-    def __repr__(self):
-        return f"<ToolExecutionEvent(event_id='{self.event_id}', trace_id='{self.trace_id}', event_type='{self.event_type}')>"
+    zone = relationship("Zone", back_populates="alerts")
+    sensor_device = relationship("SensorDevice", back_populates="alerts")
+    actuator = relationship("Actuator", back_populates="alerts")
+    plan = relationship("IrrigationPlan", back_populates="alerts")
 
     def to_dict(self):
         return {
-            "event_id": self.event_id,
-            "trace_id": self.trace_id,
-            "conversation_id": self.conversation_id,
-            "run_id": self.run_id,
-            "step_index": self.step_index,
-            "event_type": self.event_type,
+            "alert_id": self.alert_id,
+            "rule_key": self.rule_key,
+            "severity": self.severity,
             "status": self.status,
-            "tool_name": self.tool_name,
-            "subagent_name": self.subagent_name,
+            "title": self.title,
+            "message": self.message,
             "zone_id": self.zone_id,
+            "zone_name": self.zone.name if self.zone else None,
+            "sensor_device_id": self.sensor_device_id,
+            "sensor_name": self.sensor_device.name if self.sensor_device else None,
+            "actuator_id": self.actuator_id,
+            "actuator_name": self.actuator.name if self.actuator else None,
             "plan_id": self.plan_id,
-            "input_args": self.input_args,
-            "normalized_args": self.normalized_args,
-            "output_payload": self.output_payload,
-            "output_preview": self.output_preview,
-            "error_message": self.error_message,
-            "duration_ms": self.duration_ms,
-            "payload_truncated": self.payload_truncated,
+            "object_type": self.object_type,
+            "object_id": self.object_id,
+            "assignee": self.assignee,
+            "acknowledged_at": self.acknowledged_at.isoformat() if self.acknowledged_at else None,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "context": self.context or {},
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AuditEvent(Base, BaseModel):
+    """后台审计事件"""
+
+    audit_id = Column(String(50), unique=True, nullable=False, index=True, default=lambda: f"audit_{uuid.uuid4().hex[:12]}")
+    event_type = Column(String(50), nullable=False, index=True)
+    actor = Column(String(100), nullable=False)
+    object_type = Column(String(50), nullable=False)
+    object_id = Column(String(100))
+    result = Column(String(30), default="success")
+    comment = Column(Text)
+    details = Column(JSON, default=dict)
+    occurred_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "audit_id": self.audit_id,
+            "event_type": self.event_type,
+            "actor": self.actor,
+            "object_type": self.object_type,
+            "object_id": self.object_id,
+            "result": self.result,
+            "comment": self.comment,
+            "details": self.details or {},
+            "occurred_at": self.occurred_at.isoformat() if self.occurred_at else None,
         }
 
 
@@ -474,7 +569,8 @@ def init_db():
 
     try:
         Base.metadata.create_all(bind=engine)
-        _ensure_compat_columns()
+        _ensure_sqlite_schema()
+        _drop_legacy_chat_audit_tables()
         return True
     except Exception as e:
         raise DatabaseError(f"数据库初始化错误: {e}") from e
@@ -531,33 +627,51 @@ def delete_item(db, model, item_id):
     return db_item
 
 
-def _ensure_compat_columns():
-    """Add missing columns for local SQLite development without a migration framework."""
+def _drop_legacy_chat_audit_tables():
+    """一次性清理已废弃的聊天/审计表，保留灌溉业务域数据。"""
 
     if not str(engine.url).startswith("sqlite"):
         return
 
-    compatibility_map = {
-        "irrigationlog": {
-            "zone_id": "ALTER TABLE irrigationlog ADD COLUMN zone_id VARCHAR(50)",
-            "actuator_id": "ALTER TABLE irrigationlog ADD COLUMN actuator_id VARCHAR(50)",
-            "plan_id": "ALTER TABLE irrigationlog ADD COLUMN plan_id VARCHAR(50)",
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.exec_driver_sql("DROP TABLE IF EXISTS toolexecutionevent")
+        connection.exec_driver_sql("DROP TABLE IF EXISTS chatmessage")
+        connection.exec_driver_sql("DROP TABLE IF EXISTS agentdecisionlog")
+        connection.exec_driver_sql("DROP TABLE IF EXISTS conversationsession")
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def _ensure_sqlite_schema():
+    """为已有 SQLite 数据库补齐新增字段，避免开发环境旧库无法启动。"""
+
+    if not str(engine.url).startswith("sqlite"):
+        return
+
+    schema_updates = {
+        "user": {
+            "display_name": "ALTER TABLE user ADD COLUMN display_name VARCHAR(100)",
+            "phone": "ALTER TABLE user ADD COLUMN phone VARCHAR(30)",
+            "password_changed_at": "ALTER TABLE user ADD COLUMN password_changed_at DATETIME",
+            "created_by": "ALTER TABLE user ADD COLUMN created_by VARCHAR(100)",
         },
-        "agentdecisionlog": {
-            "zone_id": "ALTER TABLE agentdecisionlog ADD COLUMN zone_id VARCHAR(50)",
-            "plan_id": "ALTER TABLE agentdecisionlog ADD COLUMN plan_id VARCHAR(50)",
+        "actuator": {
+            "serial_number": "ALTER TABLE actuator ADD COLUMN serial_number VARCHAR(100)",
+            "firmware_version": "ALTER TABLE actuator ADD COLUMN firmware_version VARCHAR(50)",
+            "health_status": "ALTER TABLE actuator ADD COLUMN health_status VARCHAR(30) DEFAULT 'healthy'",
+            "last_seen_at": "ALTER TABLE actuator ADD COLUMN last_seen_at DATETIME",
         },
-        "chatmessage": {
-            "trace_id": "ALTER TABLE chatmessage ADD COLUMN trace_id VARCHAR(50)",
+        "zonesensorbinding": {
+            "sensor_device_id": "ALTER TABLE zonesensorbinding ADD COLUMN sensor_device_id VARCHAR(50)",
         },
     }
 
-    inspector = inspect(engine)
     with engine.begin() as connection:
-        for table_name, statements in compatibility_map.items():
-            if table_name not in inspector.get_table_names():
-                continue
-            existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
-            for column_name, statement in statements.items():
+        for table_name, updates in schema_updates.items():
+            existing_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            for column_name, ddl in updates.items():
                 if column_name not in existing_columns:
-                    connection.execute(text(statement))
+                    connection.exec_driver_sql(ddl)
