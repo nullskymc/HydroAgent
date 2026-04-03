@@ -2,10 +2,11 @@ import { AppShell } from '@/components/app-shell'
 import { AnalyticsOverviewPanel } from '@/components/analytics-overview'
 import { ConsoleEmptyState, ConsoleSectionHeader } from '@/components/console-primitives'
 import { DashboardActions } from '@/components/dashboard-actions'
+import { DashboardChatLauncher } from '@/components/dashboard-chat-launcher'
 import { Badge, StatusDot } from '@/components/ui/badge'
 import { requirePermission } from '@/lib/auth'
-import { getAnalyticsOverview, getDashboardData, getSettingsData } from '@/lib/server-data'
-import { DecisionLog, IrrigationPlan, Zone } from '@/lib/types'
+import { getDashboardData, getSettingsData } from '@/lib/server-data'
+import { AnalyticsOverview, DecisionLog, IrrigationPlan, Zone } from '@/lib/types'
 import { formatDateTime, formatNumber } from '@/lib/utils'
 
 type Tone = 'default' | 'success' | 'warning' | 'danger'
@@ -66,12 +67,68 @@ function buildZoneView(zone: Zone, sensorRows: Array<Record<string, unknown>>, p
   }
 }
 
+function buildOverviewFromDashboard(
+  zoneRows: ZoneView[],
+  dashboard: Awaited<ReturnType<typeof getDashboardData>>,
+): AnalyticsOverview {
+  const labels = zoneRows.map((item) => item.zone.name)
+  const alertTrendSeed = zoneRows.reduce<Record<string, number[]>>(
+    (accumulator, item) => {
+      accumulator.high.push(item.latestPlan?.risk_level === 'high' ? 1 : 0)
+      accumulator.medium.push(item.latestPlan?.risk_level === 'medium' ? 1 : 0)
+      accumulator.low.push(item.latestPlan?.risk_level === 'low' ? 1 : 0)
+      return accumulator
+    },
+    { high: [], medium: [], low: [] },
+  )
+
+  return {
+    range: '7d',
+    kpis: {
+      zone_count: dashboard.zones.length,
+      pending_plan_count: dashboard.plans.filter((plan) => plan.approval_status === 'pending').length,
+      active_alert_count: zoneRows.filter((item) => item.latestPlan?.risk_level === 'high' || item.deficit > 5).length,
+      executed_plan_count: dashboard.plans.filter((plan) => plan.execution_status === 'executed').length,
+    },
+    soil_trend: {
+      zone_id: 'dashboard',
+      zone_name: '分区湿度概览',
+      range: '7d',
+      labels,
+      soil_moisture: zoneRows.map((item) => Number(item.soilMoisture.toFixed(2))),
+      threshold: zoneRows.map((item) => Number(item.threshold.toFixed(2))),
+    },
+    plan_funnel: {
+      range: '7d',
+      items: [
+        { stage: 'generated', count: dashboard.plans.length },
+        { stage: 'pending', count: dashboard.plans.filter((plan) => plan.approval_status === 'pending').length },
+        { stage: 'approved', count: dashboard.plans.filter((plan) => plan.approval_status === 'approved').length },
+        { stage: 'executed', count: dashboard.plans.filter((plan) => plan.execution_status === 'executed').length },
+        { stage: 'completed_or_rejected', count: dashboard.plans.filter((plan) => ['executed', 'rejected'].includes(plan.status)).length },
+      ],
+    },
+    alert_trend: {
+      range: '7d',
+      labels,
+      series: alertTrendSeed,
+    },
+    zone_health: zoneRows.map((item) => ({
+      zone_id: item.zone.zone_id,
+      zone_name: item.zone.name,
+      soil_moisture: Number(item.soilMoisture.toFixed(2)),
+      deficit: Number(item.deficit.toFixed(2)),
+      actuator_status: item.actuator?.status || 'unknown',
+      alert_count: item.latestPlan?.risk_level === 'high' || item.deficit > 5 ? 1 : 0,
+    })),
+  }
+}
+
 export default async function DashboardPage() {
   await requirePermission('dashboard:view')
-  const [dashboard, settings, overview] = await Promise.all([
+  const [dashboard, settings] = await Promise.all([
     getDashboardData(),
     getSettingsData().catch(() => null),
-    getAnalyticsOverview('7d').catch(() => null),
   ])
   const sensorRows = (dashboard.sensors?.sensors || []) as Array<Record<string, unknown>>
   const forecastRows = dashboard.weather?.forecast || []
@@ -83,6 +140,7 @@ export default async function DashboardPage() {
   const averageSoil = dashboard.sensors?.average.soil_moisture ?? null
   const rainfall = dashboard.sensors?.average.rainfall ?? null
   const attentionCount = zoneRows.filter((zone) => zone.deficit > 5 || zone.latestPlan?.approval_status === 'pending').length
+  const overview = buildOverviewFromDashboard(zoneRows, dashboard)
   const lastUpdated = formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp)
   const controlLockedReason = !backendOnline
     ? '核心离线时，所有灌溉操作保持只读。'
@@ -266,6 +324,8 @@ export default async function DashboardPage() {
           </div>
 
           <aside className="console-sidebar">
+            <DashboardChatLauncher />
+
             <section className="console-section">
               <ConsoleSectionHeader
                 eyebrow="审批"

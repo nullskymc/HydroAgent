@@ -1,11 +1,19 @@
-import { ChatShell } from '@/components/app-shell'
+import { AppShell } from '@/components/app-shell'
 import { ChatPanel } from '@/components/chat-panel'
 import { getSessionToken, requirePermission } from '@/lib/auth'
 import { fetchBackendJson } from '@/lib/backend'
 import { ConversationDetail, ConversationSummary } from '@/lib/types'
 
-export default async function ChatPage() {
+export default async function ChatPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ prompt?: string; autosend?: string; fresh?: string }>
+}) {
   await requirePermission('chat:view')
+  const resolvedSearchParams = (await searchParams) || {}
+  const initialPrompt = typeof resolvedSearchParams.prompt === 'string' ? resolvedSearchParams.prompt : ''
+  const autoSendInitialPrompt = resolvedSearchParams.autosend === '1' && initialPrompt.trim().length > 0
+  const startFresh = resolvedSearchParams.fresh === '1'
   const authToken = await getSessionToken()
   const conversationsPayload = await fetchBackendJson<{ conversations: ConversationSummary[] }>('/api/conversations', { authToken }).catch(() => ({
     conversations: [],
@@ -16,11 +24,16 @@ export default async function ChatPage() {
     : null
 
   return (
-    <ChatShell currentPath="/chat">
-      <ChatPanel
-        initialConversations={conversationsPayload.conversations}
-        initialActiveConversation={initialActiveConversation}
-      />
-    </ChatShell>
+    <AppShell currentPath="/chat">
+      <div className="chat-page-frame">
+        <ChatPanel
+          initialConversations={conversationsPayload.conversations}
+          initialActiveConversation={initialActiveConversation}
+          initialPrompt={initialPrompt}
+          autoSendInitialPrompt={autoSendInitialPrompt}
+          startFreshConversation={startFresh}
+        />
+      </div>
+    </AppShell>
   )
 }

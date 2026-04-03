@@ -20,6 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from src.config import config
 from src.exceptions.exceptions import DatabaseError
@@ -548,7 +549,11 @@ class AuditEvent(Base, BaseModel):
 try:
     _db_uri = config.get_db_uri()
     _connect_args = {"check_same_thread": False} if _db_uri.startswith("sqlite") else {}
-    engine = create_engine(_db_uri, connect_args=_connect_args)
+    engine_kwargs = {"connect_args": _connect_args}
+    # SQLite 文件库在开发环境并发请求下更适合无池化连接，避免 QueuePool 被短时打满。
+    if _db_uri.startswith("sqlite"):
+        engine_kwargs["poolclass"] = NullPool
+    engine = create_engine(_db_uri, **engine_kwargs)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 except Exception as e:
     raise DatabaseError(f"数据库连接错误: {e}") from e

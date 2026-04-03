@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, useTransition } from 'react'
 import { ArrowUp, Bot, ChevronDown, LoaderCircle, Trash2, Waves, Workflow, Wrench } from 'lucide-react'
 import {
   ChatMessage,
@@ -115,6 +115,7 @@ function toLocalMessage(message: ChatMessage): LocalMessage {
   return {
     ...message,
     localId: createLocalId(),
+    plan: message.plan ?? null,
     toolTrace: persistedTrace ? toToolProgressViewModel(persistedTrace) : null,
   }
 }
@@ -229,9 +230,15 @@ function ToolTraceCard({ trace }: { trace: ToolProgressViewModel }) {
 export function ChatPanel({
   initialConversations,
   initialActiveConversation,
+  initialPrompt,
+  autoSendInitialPrompt = false,
+  startFreshConversation = false,
 }: {
   initialConversations: ConversationSummary[]
   initialActiveConversation: ConversationDetail | null
+  initialPrompt?: string
+  autoSendInitialPrompt?: boolean
+  startFreshConversation?: boolean
 }) {
   const [conversations, setConversations] = useState(initialConversations)
   const [activeConversation, setActiveConversation] = useState<ConversationDetail | null>(initialActiveConversation)
@@ -245,6 +252,7 @@ export function ChatPanel({
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const initialPromptHandledRef = useRef(false)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -385,15 +393,16 @@ export function ChatPanel({
     }
   }
 
-  async function submitMessage(nextInput?: string) {
-    const draft = (nextInput ?? input).trim()
+  async function submitMessage(options?: { draft?: string; forceNewConversation?: boolean }) {
+    const draft = (options?.draft ?? input).trim()
     if (!draft || isStreaming) return
 
     setError(null)
     setInput('')
     setIsStreaming(true)
 
-    let conversationId = activeConversation?.conversation.session_id
+    // 首页快捷入口需要强制新建对话，避免把临时问题发送到旧会话里。
+    let conversationId = options?.forceNewConversation ? undefined : activeConversation?.conversation.session_id
     if (!conversationId) {
       const detail = await createConversation()
       conversationId = detail?.conversation.session_id
@@ -477,6 +486,23 @@ export function ChatPanel({
       await refreshConversations()
     }
   }
+
+  const handleInitialPrompt = useEffectEvent(async (draft: string) => {
+    if (autoSendInitialPrompt) {
+      await submitMessage({ draft, forceNewConversation: startFreshConversation })
+      return
+    }
+
+    setInput(draft)
+    composerRef.current?.focus()
+  })
+
+  useEffect(() => {
+    const draft = initialPrompt?.trim()
+    if (initialPromptHandledRef.current || !draft) return
+    initialPromptHandledRef.current = true
+    void handleInitialPrompt(draft)
+  }, [initialPrompt])
 
   function renderPlan(plan: IrrigationPlan) {
     const view = toPlanCardViewModel(plan)

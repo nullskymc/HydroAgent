@@ -9,6 +9,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any
 
 import requests
@@ -31,6 +32,10 @@ from src.llm.persistence import get_hydro_persistence
 logger = logging.getLogger("hydroagent.service")
 
 WORKSPACE_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", ".hydro_workspace")
+EVIDENCE_CACHE_TTL_SECONDS = 5
+_sensor_summary_cache: dict[str, tuple[dt.datetime, dict[str, Any]]] = {}
+_weather_summary_cache: dict[str, tuple[dt.datetime, dict[str, Any]]] = {}
+_cache_lock = Lock()
 
 
 @dataclass
@@ -394,6 +399,10 @@ def summarize_system_irrigation(db: Session) -> dict[str, Any]:
 
 
 def _collect_zone_sensor_summary(zone: Zone) -> dict[str, Any]:
+    cached = _read_cached_payload(_sensor_summary_cache, zone.zone_id)
+    if cached:
+        return dict(cached)
+
     sensor_ids = [binding.sensor_id for binding in zone.sensor_bindings if binding.is_enabled] or config.SENSOR_IDS[:1]
     readings = []
     for sensor_id in sensor_ids:
@@ -408,28 +417,36 @@ def _collect_zone_sensor_summary(zone: Zone) -> dict[str, Any]:
             logger.warning("Sensor collection failed for %s: %s", sensor_id, exc)
 
     if not readings:
-        return {
+        payload = {
             "sensor_ids": sensor_ids,
             "readings": [],
             "average": {},
             "status": "missing",
         }
+        _write_cached_payload(_sensor_summary_cache, zone.zone_id, payload)
+        return payload
 
     metrics = ["soil_moisture", "temperature", "light_intensity", "rainfall"]
     average = {
         key: round(sum(float(reading.get(key, 0.0)) for reading in readings) / len(readings), 2)
         for key in metrics
     }
-    return {
+    payload = {
         "sensor_ids": sensor_ids,
         "readings": readings,
         "average": average,
         "status": "ok",
         "timestamp": dt.datetime.utcnow().isoformat(),
     }
+    _write_cached_payload(_sensor_summary_cache, zone.zone_id, payload)
+    return payload
 
 
 def _get_weather_summary(location: str) -> dict[str, Any]:
+    cached = _read_cached_payload(_weather_summary_cache, location)
+    if cached:
+        return dict(cached)
+
     default_summary = {
         "city": location,
         "forecast_days": [],
@@ -457,12 +474,14 @@ def _get_weather_summary(location: str) -> dict[str, Any]:
                 }
                 for item in casts[:4]
             ]
-            return {
+            payload = {
                 "city": location,
                 "forecast_days": forecast_days,
                 "rain_expected": any("雨" in (item.get("day_weather") or "") for item in forecast_days[:2]),
                 "source": "api",
             }
+            _write_cached_payload(_weather_summary_cache, location, payload)
+            return payload
     except Exception as exc:
         logger.warning("Weather lookup failed for %s: %s", location, exc)
 
@@ -478,6 +497,7 @@ def _get_weather_summary(location: str) -> dict[str, Any]:
     ]
     default_summary["forecast_days"] = forecast_days
     default_summary["rain_expected"] = any("雨" in (item.get("day_weather") or "") for item in forecast_days[:2])
+    _write_cached_payload(_weather_summary_cache, location, default_summary)
     return default_summary
 
 
@@ -576,3 +596,21 @@ def _write_workspace(plan_id: str, **payloads: Any) -> str:
         with open(file_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
     return workspace_dir
+
+
+def _read_cached_payload(cache: dict[str, tuple[dt.datetime, dict[str, Any]]], key: str) -> dict[str, Any] | None:
+    with _cache_lock:
+        cached = cache.get(key)
+    if not cached:
+        return None
+    cached_at, payload = cached
+    if (dt.datetime.utcnow() - cached_at).total_seconds() > EVIDENCE_CACHE_TTL_SECONDS:
+        with _cache_lock:
+            cache.pop(key, None)
+        return None
+    return payload
+
+
+def _write_cached_payload(cache: dict[str, tuple[dt.datetime, dict[str, Any]]], key: str, payload: dict[str, Any]):
+    with _cache_lock:
+        cache[key] = (dt.datetime.utcnow(), payload)

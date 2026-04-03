@@ -163,6 +163,9 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
                 decision_payload = _build_decision_event_payload(req.conversation_id, event)
                 if decision_payload:
                     await persistence.record_decision_async(decision_payload, thread_id=req.conversation_id)
+                plan_event_payload = _build_plan_event_payload(req.conversation_id, event, trace_id=trace_id)
+                if plan_event_payload:
+                    await persistence.record_plan_event(req.conversation_id, plan_event_payload)
                 outbound_event = dict(event)
                 if event_type != "done":
                     outbound_event["trace_id"] = trace_id
@@ -385,6 +388,30 @@ def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | N
     return None
 
 
+def _build_plan_event_payload(conversation_id: str, event: dict, *, trace_id: str | None = None) -> dict | None:
+    event_type = event.get("type")
+    if event_type not in {"plan_proposed", "plan_updated", "approval_result", "execution_result"}:
+        return None
+
+    plan = event.get("plan") if isinstance(event.get("plan"), dict) else None
+    if not plan:
+        return None
+
+    plan_id = str(plan.get("plan_id") or "").strip()
+    if not plan_id:
+        return None
+
+    return {
+        "event_id": f"planevt_{uuid.uuid4().hex[:12]}",
+        "conversation_id": conversation_id,
+        "event_type": event_type,
+        "plan_id": plan_id,
+        "plan": plan,
+        "trace_id": trace_id,
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+
 def _preview_text(value, limit: int = 280):
     try:
         text = json.dumps(value, ensure_ascii=False, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value)
@@ -451,6 +478,7 @@ async def generate_plan(
         object_id=plan.plan_id,
         details={"zone_id": req.zone_id, "trigger": req.trigger},
     )
+    await _record_plan_event_if_needed("plan_proposed", plan.to_dict())
     return {"plan": plan.to_dict()}
 
 
@@ -481,6 +509,7 @@ async def approve_plan_endpoint(
         object_id=plan.plan_id,
         comment=req.comment,
     )
+    await _record_plan_event_if_needed("approval_result", plan.to_dict())
     return {"plan": plan.to_dict()}
 
 
@@ -503,6 +532,7 @@ async def reject_plan_endpoint(
         object_id=plan.plan_id,
         comment=req.comment,
     )
+    await _record_plan_event_if_needed("approval_result", plan.to_dict())
     return {"plan": plan.to_dict()}
 
 
@@ -524,7 +554,23 @@ async def execute_plan_endpoint(
         object_type="plan",
         object_id=plan.plan_id,
     )
+    await _record_plan_event_if_needed("execution_result", plan.to_dict())
     return {"plan": plan.to_dict()}
+
+
+async def _record_plan_event_if_needed(event_type: str, plan: dict | None):
+    if not isinstance(plan, dict):
+        return
+
+    conversation_id = str(plan.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return
+
+    payload = _build_plan_event_payload(conversation_id, {"type": event_type, "plan": plan})
+    if not payload:
+        return
+
+    await get_hydro_persistence().record_plan_event(conversation_id, payload)
 
 
 @router.get("/sensors/current")

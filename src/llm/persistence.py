@@ -23,6 +23,7 @@ THREAD_META_CHANNEL = "hydro.thread.meta"
 CHAT_TURN_CHANNEL = "hydro.chat.turn"
 TRACE_EVENT_CHANNEL = "hydro.trace.event"
 DECISION_CHANNEL = "hydro.decision"
+PLAN_EVENT_CHANNEL = "hydro.plan.event"
 
 AUDIT_THREAD_ID = "__hydro_audit__"
 
@@ -314,6 +315,15 @@ class HydroGraphPersistence:
             task_id=payload.get("decision_id") or f"decision-{uuid.uuid4().hex[:12]}",
         )
 
+    async def record_plan_event(self, thread_id: str, payload: dict[str, Any]):
+        await self.initialize()
+        config = await self._get_anchor_or_latest_config_async(thread_id)
+        await self.async_saver.aput_writes(
+            config,
+            [(PLAN_EVENT_CHANNEL, payload)],
+            task_id=payload.get("event_id") or f"plan-event-{uuid.uuid4().hex[:12]}",
+        )
+
     def record_decision_sync(self, payload: dict[str, Any], thread_id: str | None = None):
         self._ensure_sync_initialized()
         target_thread = thread_id or AUDIT_THREAD_ID
@@ -348,20 +358,27 @@ class HydroGraphPersistence:
             [item for item in chat_turns if isinstance(item, dict)],
             key=lambda item: str(item.get("created_at") or ""),
         )
+        plan_messages_by_trace, trailing_plan_messages = self._build_plan_messages(history)
         messages: list[dict[str, Any]] = []
         for turn in ordered_turns:
             user_content = str(turn.get("user_content") or "").strip()
             assistant_content = str(turn.get("assistant_content") or turn.get("assistant_preview") or "").strip()
             created_at = turn.get("created_at")
+            trace_id = str(turn.get("trace_id") or "").strip()
             if user_content:
                 messages.append({"role": "user", "content": user_content, "created_at": created_at})
+            if trace_id:
+                messages.extend(plan_messages_by_trace.pop(trace_id, []))
             if assistant_content:
                 payload = {"role": "assistant", "content": assistant_content, "created_at": created_at}
-                trace_id = turn.get("trace_id")
                 if trace_id:
                     payload["trace_id"] = trace_id
                     payload["tool_trace"] = trace_payloads.get(trace_id)
                 messages.append(payload)
+
+        for trace_id in sorted(plan_messages_by_trace):
+            messages.extend(plan_messages_by_trace[trace_id])
+        messages.extend(trailing_plan_messages)
 
         return {"conversation": summary, "messages": messages}
 
@@ -480,6 +497,58 @@ class HydroGraphPersistence:
             )
             for trace_id, events in grouped.items()
         }
+
+    def _build_plan_messages(self, history: list[CheckpointTuple]) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for item in self._collect_channel_records(history, PLAN_EVENT_CHANNEL):
+            if not isinstance(item, dict):
+                continue
+            plan = item.get("plan") if isinstance(item.get("plan"), dict) else None
+            plan_id = str(item.get("plan_id") or (plan or {}).get("plan_id") or "").strip()
+            if not plan_id or plan is None:
+                continue
+
+            created_at = str(item.get("created_at") or plan.get("updated_at") or plan.get("created_at") or "")
+            current = grouped.get(plan_id)
+            if current is None:
+                grouped[plan_id] = {
+                    "plan": plan,
+                    "created_at": created_at,
+                    "latest_at": created_at,
+                    "trace_id": str(item.get("trace_id") or "").strip() or None,
+                }
+                continue
+
+            # 会话里同一个计划卡片只保留一张，但内容始终用最新状态覆盖。
+            if created_at and (not current["created_at"] or created_at < current["created_at"]):
+                current["created_at"] = created_at
+                if item.get("trace_id"):
+                    current["trace_id"] = str(item.get("trace_id"))
+            if created_at >= current["latest_at"]:
+                current["plan"] = plan
+                current["latest_at"] = created_at
+            if not current.get("trace_id") and item.get("trace_id"):
+                current["trace_id"] = str(item.get("trace_id"))
+
+        grouped_messages: dict[str, list[dict[str, Any]]] = {}
+        trailing_messages: list[dict[str, Any]] = []
+        for item in grouped.values():
+            message = {
+                "role": "tool",
+                "content": None,
+                "plan": item["plan"],
+                "created_at": item["created_at"] or item["latest_at"],
+            }
+            trace_id = item.get("trace_id")
+            if trace_id:
+                grouped_messages.setdefault(str(trace_id), []).append(message)
+            else:
+                trailing_messages.append(message)
+
+        for messages in grouped_messages.values():
+            messages.sort(key=lambda item: str(item.get("created_at") or ""))
+        trailing_messages.sort(key=lambda item: str(item.get("created_at") or ""))
+        return grouped_messages, trailing_messages
 
 
 _hydro_persistence: HydroGraphPersistence | None = None

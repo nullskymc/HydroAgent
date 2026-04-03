@@ -358,6 +358,69 @@
   border-bottom: 0;
 }
 
+.console-chat-launcher {
+  display: grid;
+  gap: 10px;
+}
+
+.console-chat-textarea {
+  width: 100%;
+  min-height: 108px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--foreground);
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.console-chat-textarea:focus {
+  border-color: rgba(15, 118, 110, 0.36);
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.08);
+}
+
+.console-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.console-chat-submit,
+.console-chat-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.console-chat-submit {
+  border: 1px solid #111827;
+  background: #111827;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.console-chat-link {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--foreground);
+}
+
+.console-chat-hint {
+  margin: 0;
+  color: var(--foreground-soft);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
 .console-feed-row span {
   color: var(--foreground-soft);
   font-size: 0.8rem;
