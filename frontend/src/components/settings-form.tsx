@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { ModelPickerDrawer } from '@/components/model-picker-drawer'
 
 function parseSensorIds(value: string) {
   // 设置页按“每行一个传感器”编辑，再统一转换成后端需要的数组结构。
@@ -23,6 +24,13 @@ function formatConfigSourceLabel(value?: string) {
 
   const segments = value.split(/[\\/]/).filter(Boolean)
   return segments[segments.length - 1] || value
+}
+
+function formatSecretStatusLabel(configured?: boolean, maskedValue?: string | null) {
+  if (!configured) {
+    return '未配置'
+  }
+  return maskedValue || '已配置'
 }
 
 function SettingsSection({
@@ -97,6 +105,7 @@ function ReadonlyItem({
 
 const navItems = [
   { id: 'general', label: '常规' },
+  { id: 'knowledge', label: '知识引擎' },
   { id: 'irrigation', label: '灌溉策略' },
   { id: 'alarm', label: '报警策略' },
   { id: 'context', label: '运行上下文' },
@@ -117,6 +126,9 @@ export function SettingsForm({
 }) {
   const [settings, setSettings] = useState(initialSettings)
   const [sensorIdsText, setSensorIdsText] = useState((initialSettings.sensor_ids || []).join('\n'))
+  const [openAiApiKeyInput, setOpenAiApiKeyInput] = useState('')
+  const [embeddingApiKeyInput, setEmbeddingApiKeyInput] = useState('')
+  const [modelDrawerTarget, setModelDrawerTarget] = useState<'chat' | 'embedding' | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const searchParams = useSearchParams()
@@ -134,12 +146,19 @@ export function SettingsForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model_name: settings.model_name,
+          embedding_model_name: settings.embedding_model_name,
+          openai_base_url: settings.openai_base_url,
+          knowledge_top_k: settings.knowledge_top_k,
+          knowledge_chunk_size: settings.knowledge_chunk_size,
+          knowledge_chunk_overlap: settings.knowledge_chunk_overlap,
           collection_interval_minutes: settings.collection_interval_minutes,
           sensor_ids: parseSensorIds(sensorIdsText),
           soil_moisture_threshold: settings.soil_moisture_threshold,
           default_duration_minutes: settings.default_duration_minutes,
           alarm_threshold: settings.alarm_threshold,
           alarm_enabled: settings.alarm_enabled,
+          ...(openAiApiKeyInput.trim() ? { openai_api_key: openAiApiKeyInput.trim() } : {}),
+          ...(embeddingApiKeyInput.trim() ? { embedding_api_key: embeddingApiKeyInput.trim() } : {}),
         }),
       })
 
@@ -151,7 +170,15 @@ export function SettingsForm({
       const payload = await response.json()
       setSettings(payload.settings)
       setSensorIdsText((payload.settings.sensor_ids || []).join('\n'))
-      setMessage('配置已同步到 config.yaml')
+      setOpenAiApiKeyInput('')
+      setEmbeddingApiKeyInput('')
+      setMessage(
+        payload.agent_reload_error
+          ? `配置已保存，但 Agent 热重载失败：${payload.agent_reload_error}`
+          : payload.agent_reloaded
+            ? '配置已同步到 config.yaml，并已热重载 AI 引擎'
+            : '配置已同步到 config.yaml'
+      )
     })
   }
 
@@ -161,20 +188,68 @@ export function SettingsForm({
   )
   const configSourceLabel = formatConfigSourceLabel(settings.config_source)
 
+  function applyModelSelection(modelId: string) {
+    if (modelDrawerTarget === 'chat') {
+      update('model_name', modelId)
+    }
+    if (modelDrawerTarget === 'embedding') {
+      update('embedding_model_name', modelId)
+    }
+    setModelDrawerTarget(null)
+  }
+
   function renderCurrentSection() {
     switch (activeSection) {
       case 'general':
         return (
-          <SettingsSection id="general" title="常规" description="模型、采集周期和传感器列表。">
+          <SettingsSection id="general" title="常规" description="聊天模型、推理 endpoint、采集周期和传感器列表。">
             <SettingsItem
-              label="模型名称"
+              label="聊天模型"
               path="model_name"
-              detail="用于 LangChain 智能体的默认模型。"
+              detail="用于 LangChain 智能体主对话的模型名称。"
+              control={
+                <div className="settings-control-stack">
+                  <Input
+                    value={settings.model_name || ''}
+                    onChange={(event) => update('model_name', event.target.value)}
+                    placeholder="例如 gpt-4o"
+                  />
+                  <div className="settings-inline-actions">
+                    <Button variant="secondary" size="sm" onClick={() => setModelDrawerTarget('chat')}>
+                      从模型列表选择
+                    </Button>
+                  </div>
+                </div>
+              }
+            />
+            <SettingsItem
+              label="推理 Endpoint"
+              path="openai_base_url"
+              detail="用于 Chat 与 Embeddings 的 OpenAI 兼容 API 地址。"
               control={
                 <Input
-                  value={settings.model_name || ''}
-                  onChange={(event) => update('model_name', event.target.value)}
-                  placeholder="例如 gpt-4o"
+                  value={settings.openai_base_url || ''}
+                  onChange={(event) => update('openai_base_url', event.target.value)}
+                  placeholder="例如 https://api.openai.com/v1"
+                />
+              }
+            />
+            <ReadonlyItem
+              label="聊天 API Key 状态"
+              path="openai_api_key_encrypted"
+              value={formatSecretStatusLabel(settings.openai_api_key_status?.configured, settings.openai_api_key_status?.masked_value)}
+              detail="只返回掩码状态，明文不会回传前端。"
+            />
+            <SettingsItem
+              label="覆盖聊天 API Key"
+              path="openai_api_key"
+              detail="留空表示不修改；保存时仅单向写入后端加密配置。"
+              control={
+                <Input
+                  type="password"
+                  value={openAiApiKeyInput}
+                  onChange={(event) => setOpenAiApiKeyInput(event.target.value)}
+                  placeholder="输入新的 API Key"
                 />
               }
             />
@@ -201,6 +276,88 @@ export function SettingsForm({
                   value={sensorIdsText}
                   onChange={(event) => setSensorIdsText(event.target.value)}
                   placeholder={'sensor_001\nsensor_002'}
+                />
+              }
+            />
+          </SettingsSection>
+        )
+      case 'knowledge':
+        return (
+          <SettingsSection id="knowledge" title="知识引擎" description="Embeddings 模型、知识库切片与召回参数。">
+            <SettingsItem
+              label="Embeddings 模型"
+              path="embedding_model_name"
+              detail="用于知识库切片向量化与语义检索。"
+              control={
+                <div className="settings-control-stack">
+                  <Input
+                    value={settings.embedding_model_name || ''}
+                    onChange={(event) => update('embedding_model_name', event.target.value)}
+                    placeholder="例如 text-embedding-3-small"
+                  />
+                  <div className="settings-inline-actions">
+                    <Button variant="secondary" size="sm" onClick={() => setModelDrawerTarget('embedding')}>
+                      从模型列表选择
+                    </Button>
+                  </div>
+                </div>
+              }
+            />
+            <ReadonlyItem
+              label="Embeddings Key 状态"
+              path="embedding_api_key_encrypted"
+              value={formatSecretStatusLabel(settings.embedding_api_key_status?.configured, settings.embedding_api_key_status?.masked_value)}
+              detail="未单独配置时，后端会回退到聊天 API Key。"
+            />
+            <SettingsItem
+              label="覆盖 Embeddings Key"
+              path="embedding_api_key"
+              detail="留空表示继续沿用当前配置；保存时只写入密文。"
+              control={
+                <Input
+                  type="password"
+                  value={embeddingApiKeyInput}
+                  onChange={(event) => setEmbeddingApiKeyInput(event.target.value)}
+                  placeholder="输入新的 Embeddings Key"
+                />
+              }
+            />
+            <SettingsItem
+              label="默认召回条数"
+              path="knowledge_base.top_k"
+              detail="聊天检索工具默认返回的知识片段数量。"
+              control={
+                <Input
+                  type="number"
+                  value={settings.knowledge_top_k ?? ''}
+                  onChange={(event) => update('knowledge_top_k', Number(event.target.value))}
+                  placeholder="例如 4"
+                />
+              }
+            />
+            <SettingsItem
+              label="切片长度"
+              path="knowledge_base.chunk_size"
+              detail="单个知识切片的字符上限。"
+              control={
+                <Input
+                  type="number"
+                  value={settings.knowledge_chunk_size ?? ''}
+                  onChange={(event) => update('knowledge_chunk_size', Number(event.target.value))}
+                  placeholder="例如 1200"
+                />
+              }
+            />
+            <SettingsItem
+              label="切片重叠"
+              path="knowledge_base.chunk_overlap"
+              detail="相邻知识切片之间保留的重叠字符数。"
+              control={
+                <Input
+                  type="number"
+                  value={settings.knowledge_chunk_overlap ?? ''}
+                  onChange={(event) => update('knowledge_chunk_overlap', Number(event.target.value))}
+                  placeholder="例如 180"
                 />
               }
             />
@@ -292,6 +449,13 @@ export function SettingsForm({
 
   return (
     <div className="settings-workspace">
+      <ModelPickerDrawer
+        open={modelDrawerTarget !== null}
+        title={modelDrawerTarget === 'embedding' ? '选择 Embeddings 模型' : '选择聊天模型'}
+        selectedModel={modelDrawerTarget === 'embedding' ? settings.embedding_model_name : settings.model_name}
+        onClose={() => setModelDrawerTarget(null)}
+        onSelect={applyModelSelection}
+      />
       <aside className="settings-sidebar">
         <div className="settings-sidebar-header">
           <p className="eyebrow">系统设置</p>

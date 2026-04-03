@@ -1060,6 +1060,17 @@
   font-weight: 600;
 }
 
+.settings-control-stack {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .settings-switch-row {
   display: inline-flex;
   align-items: center;
@@ -1103,6 +1114,116 @@
 
 .settings-save-message {
   margin: 0;
+}
+
+.settings-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.22);
+  backdrop-filter: blur(3px);
+}
+
+.settings-drawer {
+  width: min(100%, 480px);
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 20px;
+  background: #ffffff;
+  border-left: 1px solid var(--border);
+  box-shadow: -20px 0 60px rgba(15, 23, 42, 0.12);
+}
+
+.settings-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-drawer-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-drawer-copy h3,
+.settings-drawer-copy p {
+  margin: 0;
+}
+
+.settings-drawer-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.settings-drawer-source,
+.settings-drawer-error,
+.settings-drawer-empty {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.settings-drawer-source {
+  background: #f6f7f8;
+  color: var(--foreground-soft);
+}
+
+.settings-drawer-error {
+  background: rgba(254, 242, 242, 0.96);
+  color: #b91c1c;
+}
+
+.settings-drawer-empty {
+  background: #f6f7f8;
+  color: var(--foreground-soft);
+}
+
+.settings-drawer-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.settings-drawer-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fbfbfc;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-drawer-item.is-active {
+  border-color: rgba(12, 74, 110, 0.32);
+  background: rgba(240, 249, 255, 0.95);
+}
+
+.settings-drawer-item-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-drawer-item-copy strong,
+.settings-drawer-item-copy span {
+  margin: 0;
+}
+
+.settings-drawer-item-copy span {
+  color: var(--foreground-soft);
+  font-size: 0.74rem;
 }
 
 @media (max-width: 1360px) {

@@ -257,6 +257,76 @@
   cursor: pointer;
 }
 
+.knowledge-console-page {
+  gap: 16px;
+}
+
+.knowledge-ingest-panel,
+.knowledge-list-panel,
+.knowledge-detail-panel {
+  background: #fff;
+}
+
+.knowledge-ingest-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.knowledge-ingest-actions,
+.knowledge-pagination,
+.knowledge-detail-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.knowledge-layout {
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+}
+
+.knowledge-chunk-list {
+  display: grid;
+  gap: 12px;
+}
+
+.knowledge-chunk-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #fafafb;
+  padding: 14px 16px;
+}
+
+.knowledge-chunk-card p {
+  margin: 0;
+  color: var(--foreground-soft);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.knowledge-chunk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 960px) {
+  .knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-ingest-grid,
+  .knowledge-detail-footer,
+  .knowledge-pagination {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .login-page {
   min-height: 100vh;
   display: grid;

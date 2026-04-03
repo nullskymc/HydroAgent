@@ -3,8 +3,9 @@
 """
 import os
 import yaml
-import logging
 from dotenv import load_dotenv
+
+from src.security import decrypt_config_secret, encrypt_config_secret, mask_secret
 
 class Config:
     """
@@ -61,8 +62,12 @@ class Config:
         self.MODEL_PATH = os.getenv("MODEL_PATH") or self._get_from_yaml("ml_model.path", None)
         self.MODEL_INPUT_SIZE = int(os.getenv("MODEL_INPUT_SIZE") or self._get_from_yaml("ml_model.input_size", 6))
         self.MODEL_HIDDEN_SIZE = int(os.getenv("MODEL_HIDDEN_SIZE") or self._get_from_yaml("ml_model.hidden_size", 50))
-        # 新增：模型名称配置
         self.MODEL_NAME = self._config_from_yaml.get('model_name') or os.getenv('MODEL_NAME') or 'gpt-4o'
+        self.EMBEDDING_MODEL_NAME = (
+            self._config_from_yaml.get('embedding_model_name')
+            or os.getenv('EMBEDDING_MODEL_NAME')
+            or 'text-embedding-3-small'
+        )
         
         # 报警配置
         self.ALARM_THRESHOLD_SOIL_MOISTURE = float(os.getenv("ALARM_THRESHOLD") or self._get_from_yaml(
@@ -79,13 +84,32 @@ class Config:
         self.LOG_FILE = os.getenv("LOG_FILE") or self._get_from_yaml("logging.file", "irrigation_system.log")
         
         # LLM/OPENAI配置
-        self.OPENAI_API_KEY = (
-            self._config_from_yaml.get('openai_api_key')
-            or os.getenv('OPENAI_API_KEY')
+        self.OPENAI_API_KEY = self._resolve_secret(
+            env_key='OPENAI_API_KEY',
+            yaml_key='openai_api_key',
+            encrypted_yaml_key='openai_api_key_encrypted',
         )
         self.OPENAI_BASE_URL = (
             self._config_from_yaml.get('openai_base_url')
             or os.getenv('OPENAI_BASE_URL')
+        )
+        self.EMBEDDING_API_KEY = self._resolve_secret(
+            env_key='EMBEDDING_API_KEY',
+            yaml_key='embedding_api_key',
+            encrypted_yaml_key='embedding_api_key_encrypted',
+            fallback=self.OPENAI_API_KEY,
+        )
+        self.KNOWLEDGE_TOP_K = int(
+            os.getenv('KNOWLEDGE_TOP_K')
+            or self._get_from_yaml('knowledge_base.top_k', 4)
+        )
+        self.KNOWLEDGE_CHUNK_SIZE = int(
+            os.getenv('KNOWLEDGE_CHUNK_SIZE')
+            or self._get_from_yaml('knowledge_base.chunk_size', 1200)
+        )
+        self.KNOWLEDGE_CHUNK_OVERLAP = int(
+            os.getenv('KNOWLEDGE_CHUNK_OVERLAP')
+            or self._get_from_yaml('knowledge_base.chunk_overlap', 180)
         )
         
         # FastAPI 服务配置
@@ -117,6 +141,21 @@ class Config:
                 return default
         return value
 
+    def _resolve_secret(self, *, env_key, yaml_key, encrypted_yaml_key, fallback=None):
+        env_value = os.getenv(env_key)
+        if env_value:
+            return env_value
+
+        encrypted_value = self._config_from_yaml.get(encrypted_yaml_key)
+        if encrypted_value:
+            return decrypt_config_secret(encrypted_value)
+
+        plain_value = self._config_from_yaml.get(yaml_key)
+        if plain_value:
+            return plain_value
+
+        return fallback
+
     def _set_in_yaml(self, path, value):
         """按点路径写入嵌套 YAML 配置。"""
         keys = path.split('.')
@@ -126,6 +165,23 @@ class Config:
                 target[key] = {}
             target = target[key]
         target[keys[-1]] = value
+
+    def _delete_in_yaml(self, path):
+        keys = path.split('.')
+        target = self._config_from_yaml
+        for key in keys[:-1]:
+            if not isinstance(target, dict) or key not in target:
+                return
+            target = target[key]
+        if isinstance(target, dict):
+            target.pop(keys[-1], None)
+
+    def _serialize_secret_status(self, value):
+        masked = mask_secret(value)
+        return {
+            "configured": bool(masked),
+            "masked_value": masked,
+        }
 
     def _write_yaml(self):
         """将当前 YAML 配置持久化回 config.yaml。"""
@@ -140,6 +196,13 @@ class Config:
             "alarm_threshold": self.ALARM_THRESHOLD_SOIL_MOISTURE,
             "alarm_enabled": self.ALARM_ENABLED,
             "model_name": self.MODEL_NAME,
+            "embedding_model_name": self.EMBEDDING_MODEL_NAME,
+            "openai_base_url": self.OPENAI_BASE_URL,
+            "knowledge_top_k": self.KNOWLEDGE_TOP_K,
+            "knowledge_chunk_size": self.KNOWLEDGE_CHUNK_SIZE,
+            "knowledge_chunk_overlap": self.KNOWLEDGE_CHUNK_OVERLAP,
+            "openai_api_key_status": self._serialize_secret_status(self.OPENAI_API_KEY),
+            "embedding_api_key_status": self._serialize_secret_status(self.EMBEDDING_API_KEY),
             "sensor_ids": self.SENSOR_IDS,
             "collection_interval_minutes": self.DATA_COLLECTION_INTERVAL_MINUTES,
             "db_type": self.DB_TYPE,
@@ -156,6 +219,11 @@ class Config:
             "collection_interval_minutes": ("sensors.collection_interval_minutes", int),
             "sensor_ids": ("sensors.ids", list),
             "model_name": ("model_name", str),
+            "embedding_model_name": ("embedding_model_name", str),
+            "openai_base_url": ("openai_base_url", str),
+            "knowledge_top_k": ("knowledge_base.top_k", int),
+            "knowledge_chunk_size": ("knowledge_base.chunk_size", int),
+            "knowledge_chunk_overlap": ("knowledge_base.chunk_overlap", int),
         }
 
         for key, value in updates.items():
@@ -164,6 +232,22 @@ class Config:
             path, caster = mapping[key]
             normalized = [item for item in value if item] if key == "sensor_ids" else caster(value)
             self._set_in_yaml(path, normalized)
+
+        self._update_secret_in_yaml(
+            updates=updates,
+            runtime_attr="OPENAI_API_KEY",
+            plain_yaml_key="openai_api_key",
+            encrypted_yaml_key="openai_api_key_encrypted",
+            update_key="openai_api_key",
+        )
+        self._update_secret_in_yaml(
+            updates=updates,
+            runtime_attr="EMBEDDING_API_KEY",
+            plain_yaml_key="embedding_api_key",
+            encrypted_yaml_key="embedding_api_key_encrypted",
+            update_key="embedding_api_key",
+            fallback_attr="OPENAI_API_KEY",
+        )
 
         self._write_yaml()
 
@@ -181,8 +265,44 @@ class Config:
             self.SENSOR_IDS = [item for item in updates["sensor_ids"] if item]
         if "model_name" in updates and updates["model_name"] is not None:
             self.MODEL_NAME = str(updates["model_name"])
+        if "embedding_model_name" in updates and updates["embedding_model_name"] is not None:
+            self.EMBEDDING_MODEL_NAME = str(updates["embedding_model_name"])
+        if "openai_base_url" in updates:
+            self.OPENAI_BASE_URL = str(updates["openai_base_url"] or "").strip() or None
+        if "knowledge_top_k" in updates and updates["knowledge_top_k"] is not None:
+            self.KNOWLEDGE_TOP_K = int(updates["knowledge_top_k"])
+        if "knowledge_chunk_size" in updates and updates["knowledge_chunk_size"] is not None:
+            self.KNOWLEDGE_CHUNK_SIZE = int(updates["knowledge_chunk_size"])
+        if "knowledge_chunk_overlap" in updates and updates["knowledge_chunk_overlap"] is not None:
+            self.KNOWLEDGE_CHUNK_OVERLAP = int(updates["knowledge_chunk_overlap"])
 
         return self.get_runtime_settings()
+
+    def _update_secret_in_yaml(
+        self,
+        *,
+        updates,
+        runtime_attr,
+        plain_yaml_key,
+        encrypted_yaml_key,
+        update_key,
+        fallback_attr=None,
+    ):
+        if update_key not in updates:
+            return
+
+        raw_value = updates.get(update_key)
+        normalized = str(raw_value or "").strip()
+        if not normalized:
+            self._delete_in_yaml(plain_yaml_key)
+            self._delete_in_yaml(encrypted_yaml_key)
+            fallback_value = getattr(self, fallback_attr) if fallback_attr else None
+            setattr(self, runtime_attr, fallback_value)
+            return
+
+        self._delete_in_yaml(plain_yaml_key)
+        self._set_in_yaml(encrypted_yaml_key, encrypt_config_secret(normalized))
+        setattr(self, runtime_attr, normalized)
     
     def get_db_uri(self):
         """

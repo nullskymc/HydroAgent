@@ -100,5 +100,19 @@ class TestConfig(unittest.TestCase):
         expected_uri = f"mysql+pymysql://{config.DB_USER}:{config.DB_PASSWORD}@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
         self.assertEqual(config.get_db_uri(), expected_uri)
 
+    def test_secret_settings_are_masked_in_runtime_snapshot(self):
+        """测试敏感配置仅以掩码状态暴露给前端。"""
+        config = Config(config_file_path=self.config_file.name)
+        config.update_runtime_settings({
+            "openai_api_key": "sk-secret-demo",
+            "embedding_api_key": "sk-embed-demo",
+        })
+
+        runtime = config.get_runtime_settings()
+        self.assertTrue(runtime["openai_api_key_status"]["configured"])
+        self.assertTrue(runtime["embedding_api_key_status"]["configured"])
+        self.assertNotIn("sk-secret-demo", str(runtime))
+        self.assertNotIn("sk-embed-demo", str(runtime))
+
 if __name__ == "__main__":
     unittest.main()

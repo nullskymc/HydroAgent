@@ -3,6 +3,13 @@
 openai_api_key: sk-xxx-your-openai-key
 openai_base_url: https://your-openai-base-url/v1
 model_name: gpt-4o  # 指定用于LangChain智能体的模型名
+embedding_model_name: text-embedding-3-small  # 指定知识库 embeddings 模型
+# embedding_api_key: sk-xxx-your-embeddings-key  # 可选；未配置时回退到 openai_api_key
+
+knowledge_base:
+  top_k: 4
+  chunk_size: 1200
+  chunk_overlap: 180
 
 # API配置
 apis:

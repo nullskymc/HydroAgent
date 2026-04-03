@@ -25,6 +25,7 @@ from src.routers.alert_router import router as alert_router
 from src.routers.analytics_router import router as analytics_router
 from src.routers.asset_router import router as asset_router
 from src.routers.auth_router import router as auth_router
+from src.routers.knowledge_router import router as knowledge_router
 from src.routers.report_router import router as report_router
 from src.routers.user_router import router as user_router
 from src.services import bootstrap_default_zones
@@ -58,6 +59,7 @@ app.include_router(api_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(user_router, prefix="/api")
 app.include_router(asset_router, prefix="/api")
+app.include_router(knowledge_router, prefix="/api")
 app.include_router(alert_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(report_router, prefix="/api")

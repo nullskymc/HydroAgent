@@ -546,6 +546,59 @@ class AuditEvent(Base, BaseModel):
         }
 
 
+class KnowledgeDocument(Base, BaseModel):
+    """知识库文档元数据。"""
+
+    document_id = Column(String(50), unique=True, nullable=False, index=True, default=lambda: f"doc_{uuid.uuid4().hex[:12]}")
+    title = Column(String(255), nullable=False)
+    source_uri = Column(String(500))
+    content = Column(Text, nullable=False)
+    checksum = Column(String(64), nullable=False, index=True)
+    status = Column(String(30), default="ready", nullable=False)
+    chunk_count = Column(Integer, default=0, nullable=False)
+    metadata_json = Column(JSON, default=dict)
+    created_by = Column(String(100), default="system")
+
+    chunks = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "document_id": self.document_id,
+            "title": self.title,
+            "source_uri": self.source_uri,
+            "status": self.status,
+            "chunk_count": self.chunk_count,
+            "checksum": self.checksum,
+            "metadata": self.metadata_json or {},
+            "created_by": self.created_by,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class KnowledgeChunk(Base, BaseModel):
+    """知识库切片元数据，向量本体由外部向量库负责持久化。"""
+
+    chunk_id = Column(String(60), unique=True, nullable=False, index=True, default=lambda: f"chunk_{uuid.uuid4().hex[:12]}")
+    document_id = Column(String(50), ForeignKey("knowledgedocument.document_id", ondelete="CASCADE"), index=True, nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    metadata_json = Column(JSON, default=dict)
+
+    document = relationship("KnowledgeDocument", back_populates="chunks")
+
+    def to_dict(self):
+        return {
+            "chunk_id": self.chunk_id,
+            "document_id": self.document_id,
+            "chunk_index": self.chunk_index,
+            "content": self.content,
+            "metadata": self.metadata_json or {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 try:
     _db_uri = config.get_db_uri()
     _connect_args = {"check_same_thread": False} if _db_uri.startswith("sqlite") else {}

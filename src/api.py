@@ -7,6 +7,7 @@ import datetime
 import json
 import logging
 import uuid
+from urllib.parse import urlsplit
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,6 +41,35 @@ logger = logging.getLogger("hydroagent.api")
 router = APIRouter()
 
 
+def _redact_sensitive_settings(updates: dict) -> dict:
+    redacted = dict(updates)
+    for key in ("openai_api_key", "embedding_api_key"):
+        if key in redacted:
+            redacted[key] = "***"
+    return redacted
+
+
+def _should_reload_agent(updates: dict) -> bool:
+    reload_keys = {
+        "model_name",
+        "openai_base_url",
+        "openai_api_key",
+        "embedding_model_name",
+        "embedding_api_key",
+        "knowledge_top_k",
+    }
+    return any(key in updates for key in reload_keys)
+
+
+def _resolve_models_url(base_url: str | None, model_id: str | None = None) -> str:
+    normalized = (base_url or "https://api.openai.com/v1").rstrip("/")
+    if normalized.endswith("/models"):
+        base_models_url = normalized
+    else:
+        base_models_url = f"{normalized}/models"
+    return f"{base_models_url}/{model_id}" if model_id else base_models_url
+
+
 class ChatRequest(PydanticModel):
     conversation_id: str
     message: str
@@ -62,6 +92,13 @@ class SettingsUpdateRequest(PydanticModel):
     collection_interval_minutes: Optional[int] = None
     sensor_ids: Optional[list[str]] = None
     model_name: Optional[str] = None
+    embedding_model_name: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    embedding_api_key: Optional[str] = None
+    knowledge_top_k: Optional[int] = None
+    knowledge_chunk_size: Optional[int] = None
+    knowledge_chunk_overlap: Optional[int] = None
 
 
 class PlanGenerateRequest(PydanticModel):
@@ -683,17 +720,98 @@ async def update_settings(
 ):
     from src.config import config
 
-    updates = req.dict(exclude_none=True)
+    updates = req.model_dump(exclude_none=True) if hasattr(req, "model_dump") else req.dict(exclude_none=True)
     settings = config.update_runtime_settings(updates)
+    reload_error = None
+    reloaded = False
+    if _should_reload_agent(updates):
+        from src.llm.langchain_agent import get_hydro_agent
+
+        try:
+            await get_hydro_agent().reload()
+            reloaded = True
+        except Exception as exc:
+            reload_error = str(exc)
+            logger.warning("设置更新后 Agent 热重载失败: %s", exc, exc_info=True)
+    audit_details = _redact_sensitive_settings(updates)
     record_audit_event(
         db,
         actor=current_user.username,
         event_type="settings.update",
         object_type="config",
         object_id="runtime",
-        details=updates,
+        details=audit_details,
     )
-    return {"success": True, "settings": settings}
+    return {
+        "success": True,
+        "settings": settings,
+        "agent_reloaded": reloaded,
+        "agent_reload_error": reload_error,
+    }
+
+
+@router.get("/settings/openai-models")
+async def list_openai_models(
+    model_id: Optional[str] = None,
+    _: User = Depends(require_permission("settings:view")),
+):
+    from src.config import config
+    import requests
+
+    api_key = config.OPENAI_API_KEY
+    if not api_key:
+        raise HTTPException(status_code=400, detail="尚未配置 OpenAI API Key。请先在系统设置中保存 key。")
+
+    request_url = _resolve_models_url(config.OPENAI_BASE_URL, model_id=model_id)
+    try:
+        response = requests.get(
+            request_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"请求模型列表失败: {exc}") from exc
+
+    content_type = response.headers.get("content-type", "")
+    try:
+        payload = response.json() if "application/json" in content_type else {"raw": response.text}
+    except ValueError:
+        payload = {"raw": response.text}
+
+    if not response.ok:
+        raise HTTPException(status_code=response.status_code, detail=payload)
+
+    if model_id:
+        item = payload.get("data") if isinstance(payload, dict) else payload
+        return {
+            "source": request_url,
+            "host": urlsplit(request_url).netloc,
+            "model": item,
+        }
+
+    if isinstance(payload, dict):
+        raw_items = payload.get("data") or payload.get("models") or []
+    else:
+        raw_items = payload if isinstance(payload, list) else []
+
+    models = [
+        {
+            "id": item.get("id"),
+            "owned_by": item.get("owned_by"),
+            "created": item.get("created"),
+        }
+        for item in raw_items
+        if isinstance(item, dict) and item.get("id")
+    ]
+    models.sort(key=lambda item: str(item.get("id")).lower())
+    return {
+        "source": request_url,
+        "host": urlsplit(request_url).netloc,
+        "models": models,
+    }
 
 
 @router.get("/status")
@@ -714,6 +832,7 @@ async def get_system_status(db: Session = Depends(get_db), _: User = Depends(req
             "Approval Workflow",
             "Streaming SSE",
             "Decision Audit",
+            "Knowledge Base",
         ],
     }
 

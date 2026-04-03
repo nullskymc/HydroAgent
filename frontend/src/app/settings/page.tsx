@@ -4,7 +4,7 @@ import { requirePermission } from '@/lib/auth'
 import { getSettingsData } from '@/lib/server-data'
 import { RuntimeSettings } from '@/lib/types'
 
-const validSections = new Set(['general', 'irrigation', 'alarm', 'context'])
+const validSections = new Set(['general', 'knowledge', 'irrigation', 'alarm', 'context'])
 
 export default async function SettingsPage({
   searchParams,
@@ -20,12 +20,19 @@ export default async function SettingsPage({
     collection_interval_minutes: undefined,
     sensor_ids: [],
     model_name: undefined,
+    embedding_model_name: undefined,
+    openai_base_url: undefined,
+    knowledge_top_k: 4,
+    knowledge_chunk_size: 1200,
+    knowledge_chunk_overlap: 180,
+    openai_api_key_status: { configured: false },
+    embedding_api_key_status: { configured: false },
     db_type: undefined,
     config_source: undefined,
   }))
   const resolvedSearchParams = (await searchParams) || {}
   const initialSection = validSections.has(resolvedSearchParams.section || '')
-    ? (resolvedSearchParams.section as 'general' | 'irrigation' | 'alarm' | 'context')
+    ? (resolvedSearchParams.section as 'general' | 'knowledge' | 'irrigation' | 'alarm' | 'context')
     : 'general'
 
   return (
