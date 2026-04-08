@@ -45,6 +45,7 @@ from src.services.irrigation_service import (
     reject_plan,
     summarize_system_irrigation,
 )
+from src.services.ml_prediction_service import predict_zone_soil_moisture
 from src.services.rbac_service import (
     get_user_permission_keys,
     get_user_roles,
@@ -93,6 +94,7 @@ __all__ = [
     "list_sensor_devices",
     "list_zones",
     "manual_override_control",
+    "predict_zone_soil_moisture",
     "record_audit_event",
     "reject_plan",
     "require_permission",

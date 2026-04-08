@@ -23,11 +23,13 @@ from src.database.models import (
     IrrigationPlan,
     PlanApproval,
     PlanExecutionEvent,
+    SensorData,
     SensorDevice,
     Zone,
     ZoneSensorBinding,
 )
 from src.llm.persistence import get_hydro_persistence
+from src.services.ml_prediction_service import predict_zone_soil_moisture
 
 logger = logging.getLogger("hydroagent.service")
 
@@ -45,6 +47,7 @@ class ZoneEvidence:
     sensor_summary: dict[str, Any]
     weather_summary: dict[str, Any]
     current_plan: dict[str, Any] | None
+    ml_prediction: dict[str, Any] | None = None
 
 
 def bootstrap_default_zones(db: Session) -> list[Zone]:
@@ -141,7 +144,7 @@ def get_zone_status(db: Session, zone_id: str) -> dict[str, Any]:
 
 
 def collect_zone_evidence(db: Session, zone: Zone) -> ZoneEvidence:
-    sensor_summary = _collect_zone_sensor_summary(zone)
+    sensor_summary = _collect_zone_sensor_summary(db, zone)
     weather_summary = _get_weather_summary(zone.location)
     current_plan = (
         db.query(IrrigationPlan)
@@ -172,6 +175,12 @@ def create_plan(
         raise ValueError(f"Zone not found: {zone_id}")
 
     evidence = collect_zone_evidence(db, zone)
+    evidence.ml_prediction = predict_zone_soil_moisture(
+        db,
+        zone.zone_id,
+        current_sensor_summary=evidence.sensor_summary,
+        current_weather_summary=evidence.weather_summary,
+    )
     plan_payload = _build_plan_payload(evidence)
 
     plan = IrrigationPlan(
@@ -398,17 +407,21 @@ def summarize_system_irrigation(db: Session) -> dict[str, Any]:
     }
 
 
-def _collect_zone_sensor_summary(zone: Zone) -> dict[str, Any]:
+def _collect_zone_sensor_summary(db: Session, zone: Zone) -> dict[str, Any]:
     cached = _read_cached_payload(_sensor_summary_cache, zone.zone_id)
     if cached:
         return dict(cached)
 
     sensor_ids = [binding.sensor_id for binding in zone.sensor_bindings if binding.is_enabled] or config.SENSOR_IDS[:1]
     readings = []
+    raw_readings = []
     for sensor_id in sensor_ids:
         try:
             data = DataCollectionModule([sensor_id]).get_data()
+            raw_reading = dict(data)
+            raw_reading.setdefault("sensor_id", sensor_id)
             readings.append({"sensor_id": sensor_id, **data["data"]})
+            raw_readings.append(raw_reading)
             binding = next((item for item in zone.sensor_bindings if item.sensor_id == sensor_id), None)
             if binding and binding.sensor_device:
                 binding.sensor_device.status = "online"
@@ -438,8 +451,33 @@ def _collect_zone_sensor_summary(zone: Zone) -> dict[str, Any]:
         "status": "ok",
         "timestamp": dt.datetime.utcnow().isoformat(),
     }
+    _store_sensor_history(db, raw_readings)
     _write_cached_payload(_sensor_summary_cache, zone.zone_id, payload)
     return payload
+
+
+def _store_sensor_history(db: Session, raw_readings: list[dict[str, Any]]) -> None:
+    if not raw_readings:
+        return
+    try:
+        for item in raw_readings:
+            data = item.get("data", {})
+            timestamp = item.get("timestamp")
+            db.add(
+                SensorData(
+                    sensor_id=item.get("sensor_id"),
+                    timestamp=dt.datetime.fromisoformat(timestamp) if timestamp else dt.datetime.utcnow(),
+                    soil_moisture=data.get("soil_moisture"),
+                    temperature=data.get("temperature"),
+                    light_intensity=data.get("light_intensity"),
+                    rainfall=data.get("rainfall"),
+                    raw_data=item,
+                )
+            )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Sensor history persistence failed: %s", exc)
 
 
 def _get_weather_summary(location: str) -> dict[str, Any]:
@@ -508,6 +546,10 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
     threshold = float(zone.soil_moisture_threshold or 40.0)
     rainfall_expected = bool(evidence.weather_summary.get("rain_expected"))
     actuator = evidence.actuator
+    ml_prediction = evidence.ml_prediction or {}
+    predicted_moisture = _coerce_prediction_moisture(ml_prediction)
+    prediction_usable = bool(ml_prediction) and not ml_prediction.get("fallback_used") and predicted_moisture is not None
+    decision_moisture = min(moisture, predicted_moisture) if prediction_usable else moisture
 
     blockers: list[str] = []
     risk_factors: list[str] = []
@@ -521,18 +563,22 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
         blockers.append("执行器已禁用")
     elif actuator.status == "running":
         risk_factors.append("执行器当前已在运行")
+    if ml_prediction.get("fallback_used"):
+        risk_factors.append("ML 预测历史样本不足，仅作为低置信度证据")
+    elif prediction_usable and predicted_moisture < threshold:
+        risk_factors.append(f"ML 预测 24 小时湿度 {predicted_moisture:.2f}% 低于阈值")
 
-    deficit = max(0.0, threshold - moisture)
+    deficit = max(0.0, threshold - decision_moisture)
     recommended_duration = max(zone.default_duration_minutes or 30, int(deficit * 1.5) + 10) if deficit > 0 else 0
     emergency_band = max(0.0, threshold - 15)
 
     proposed_action = "hold"
-    if moisture < threshold and not blockers and (not rainfall_expected or moisture < emergency_band):
+    if decision_moisture < threshold and not blockers and (not rainfall_expected or moisture < emergency_band):
         proposed_action = "start"
 
-    if moisture < emergency_band:
+    if decision_moisture < emergency_band:
         urgency = "emergency"
-    elif moisture < threshold:
+    elif decision_moisture < threshold:
         urgency = "high"
     else:
         urgency = "normal"
@@ -555,6 +601,10 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
         f"{zone.name} 当前平均土壤湿度 {moisture:.2f}%，阈值 {threshold:.2f}%。",
         "建议启动灌溉。" if proposed_action == "start" else "当前建议暂缓灌溉。",
     ]
+    if prediction_usable:
+        reasoning.append(f"ML 预测 24 小时湿度 {predicted_moisture:.2f}%，已纳入推荐时长计算。")
+    elif ml_prediction.get("fallback_used"):
+        reasoning.append("ML 预测使用低置信度兜底结果，不单独改变启动判断。")
     if rainfall_expected:
         reasoning.append("天气预报提示近期可能降雨。")
     if blockers:
@@ -575,6 +625,7 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
             "zone": zone.to_dict(),
             "sensor_summary": evidence.sensor_summary,
             "weather_summary": evidence.weather_summary,
+            "ml_prediction": ml_prediction,
             "current_plan": evidence.current_plan,
         },
         "safety_review": {
@@ -584,6 +635,16 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
             "approval_required": requires_approval,
         },
     }
+
+
+def _coerce_prediction_moisture(ml_prediction: dict[str, Any]) -> float | None:
+    try:
+        value = ml_prediction.get("predicted_soil_moisture_24h")
+        if value is None:
+            return None
+        return max(0.0, min(100.0, float(value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _write_workspace(plan_id: str, **payloads: Any) -> str:

@@ -1,11 +1,12 @@
 import Link from 'next/link'
-import { BarChart3, Bell, BookOpenText, Bot, Boxes, History, Radar, Settings, Users } from 'lucide-react'
+import { Activity, BarChart3, Bell, BookOpenText, Bot, Boxes, History, Radar, Settings, Users } from 'lucide-react'
 import { getSessionUser } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { LogoutButton } from '@/components/logout-button'
 
 const navItems = [
   { href: '/', label: '运营总览', icon: Radar, permission: 'dashboard:view' },
+  { href: '/visualization', label: '数据大屏', icon: Activity, permission: 'dashboard:view' },
   { href: '/chat', label: '智能对话', icon: Bot, permission: 'chat:view' },
   { href: '/operations', label: '运营中心', icon: BarChart3, permission: 'operations:view' },
   { href: '/assets', label: '资产中心', icon: Boxes, permission: 'assets:view' },

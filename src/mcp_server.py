@@ -25,6 +25,7 @@ from src.services import (
     get_zone_by_id,
     get_zone_status,
     list_zones,
+    predict_zone_soil_moisture,
     reject_plan,
     summarize_system_irrigation,
 )
@@ -316,6 +317,25 @@ def recommend_irrigation_plan(zone_id: str) -> str:
             ensure_ascii=False,
             indent=2,
         )
+
+    return _with_db(_callback)
+
+
+@mcp.tool()
+def predict_soil_moisture(zone_id: str, history_hours: int = 168, forecast_hours: int = 24) -> str:
+    """Predict 24-hour soil moisture for a zone from stored sensor history."""
+
+    def _callback(db):
+        status = get_zone_status(db, zone_id)
+        prediction = predict_zone_soil_moisture(
+            db,
+            zone_id,
+            history_hours=history_hours,
+            forecast_hours=forecast_hours,
+            current_sensor_summary=status.get("sensor_summary"),
+            current_weather_summary=status.get("weather_summary"),
+        )
+        return json.dumps(prediction, ensure_ascii=False, indent=2)
 
     return _with_db(_callback)
 

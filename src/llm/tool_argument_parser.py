@@ -30,6 +30,7 @@ _ZONE_TOOLS = {
     "create_irrigation_plan",
     "control_irrigation",
     "recommend_irrigation_plan",
+    "predict_soil_moisture",
 }
 
 _PLAN_TOOLS = {
