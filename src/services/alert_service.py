@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from src.database.models import AlertEvent, AlertRule, IrrigationPlan
 from src.services.irrigation_service import collect_zone_evidence, list_zones
+from src.services.system_settings_service import get_default_soil_moisture_threshold
 
 DEFAULT_ALERT_RULES = [
     ("low_moisture", "低湿度告警", "土壤湿度进入紧急带，需要人工关注。", "high"),
@@ -88,7 +89,7 @@ def evaluate_alerts(db: Session):
         evidence = collect_zone_evidence(db, zone)
         sensor_average = evidence.sensor_summary.get("average", {})
         moisture = float(sensor_average.get("soil_moisture", 0.0) or 0.0)
-        threshold = float(zone.soil_moisture_threshold or 40.0)
+        threshold = float(zone.soil_moisture_threshold or get_default_soil_moisture_threshold(db) or 40.0)
         emergency_band = max(0.0, threshold - 15.0)
         actuator = evidence.actuator
         latest_plan = (

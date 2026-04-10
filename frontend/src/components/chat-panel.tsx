@@ -7,10 +7,12 @@ import {
   ConversationDetail,
   ConversationSummary,
   IrrigationPlan,
+  IrrigationSuggestion,
   StreamEvent,
   ToolProgressStepViewModel,
   ToolProgressViewModel,
   ToolTrace as PersistedToolTrace,
+  WorkingMemory,
 } from '@/lib/types'
 import { cn, parseJsonSafe } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -18,11 +20,12 @@ import { Badge, StatusDot } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { ChatSidebar } from '@/components/chat-sidebar'
 import { MessageRichText } from '@/components/message-rich-text'
-import { toPlanCardViewModel, toToolProgressStep, toToolProgressViewModel } from '@/lib/presenters'
+import { toPlanCardViewModel, toSuggestionCardViewModel, toToolProgressStep, toToolProgressViewModel } from '@/lib/presenters'
 
 type LocalMessage = ChatMessage & {
   localId: string
   plan?: IrrigationPlan | null
+  suggestion?: IrrigationSuggestion | null
   toolTrace?: ToolProgressViewModel | null
 }
 
@@ -32,8 +35,33 @@ const quickPrompts = [
   '查看已批准计划是否可以执行',
 ]
 
+const phaseOrder = ['evidence', 'analysis', 'planning', 'approval', 'execution', 'audit'] as const
+
+const phaseLabels: Record<(typeof phaseOrder)[number], string> = {
+  evidence: '证据',
+  analysis: '分析',
+  planning: '计划',
+  approval: '审批',
+  execution: '执行',
+  audit: '审计',
+}
+
 function createLocalId() {
   return Math.random().toString(36).slice(2, 10)
+}
+
+function createStableMessageId(message: ChatMessage, index: number) {
+  const parts = [
+    message.id ?? 'message',
+    message.trace_id ?? 'trace',
+    message.plan?.plan_id ?? 'plan',
+    message.suggestion?.suggestion_id ?? 'suggestion',
+    message.tool_call_id ?? 'tool',
+    message.tool_name ?? 'name',
+    message.created_at ?? index,
+    message.role,
+  ]
+  return parts.join(':')
 }
 
 function createToolTraceMessage(): LocalMessage {
@@ -58,6 +86,8 @@ function eventToTraceEntry(event: StreamEvent): ToolProgressStepViewModel | null
       detail: undefined,
       toolName: event.tool,
       agentName: event.agent_name,
+      phase: event.phase,
+      activeSkills: event.active_skills,
       tone: 'default',
     })
   }
@@ -68,6 +98,8 @@ function eventToTraceEntry(event: StreamEvent): ToolProgressStepViewModel | null
       detail: event.output_preview || undefined,
       toolName: event.tool,
       agentName: event.agent_name,
+      phase: event.phase,
+      activeSkills: event.active_skills,
       durationMs: event.duration_ms,
       tone: 'success',
     })
@@ -77,27 +109,9 @@ function eventToTraceEntry(event: StreamEvent): ToolProgressStepViewModel | null
       id: createLocalId(),
       title: '等待审批',
       detail: Array.isArray(event.details?.reasons) ? event.details?.reasons.join('、') : '执行启动计划前需要人工审批。',
+      phase: event.phase,
+      activeSkills: event.active_skills,
       tone: 'warning',
-    })
-  }
-  if (event.type === 'subagent_handoff') {
-    return toToolProgressStep({
-      id: createLocalId(),
-      title: '分配分析任务',
-      detail: event.task_description || '系统正在整理当前分区任务。',
-      agentName: event.agent_name,
-      subagentName: event.subagent,
-      tone: 'default',
-    })
-  }
-  if (event.type === 'subagent_result') {
-    return toToolProgressStep({
-      id: createLocalId(),
-      title: '分析结果已返回',
-      detail: event.result_preview || '相关分析已完成。',
-      agentName: event.agent_name,
-      subagentName: event.subagent,
-      tone: 'success',
     })
   }
   return null
@@ -106,16 +120,19 @@ function eventToTraceEntry(event: StreamEvent): ToolProgressStepViewModel | null
 function getMessageRoleLabel(message: LocalMessage) {
   if (message.role === 'assistant') return 'HydroAgent'
   if (message.plan) return '计划回执'
+  if (message.suggestion) return '建议回执'
   if (message.toolTrace) return '处理进度'
   return '工具回执'
 }
 
-function toLocalMessage(message: ChatMessage): LocalMessage {
+function toLocalMessage(message: ChatMessage, index = 0): LocalMessage {
   const persistedTrace = message.tool_trace as PersistedToolTrace | null | undefined
   return {
     ...message,
-    localId: createLocalId(),
+    // 首屏消息需要稳定 key，避免 SSR 和客户端因为随机 id 产生 hydration mismatch。
+    localId: createStableMessageId(message, index),
     plan: message.plan ?? null,
+    suggestion: message.suggestion ?? null,
     toolTrace: persistedTrace ? toToolProgressViewModel(persistedTrace) : null,
   }
 }
@@ -127,6 +144,45 @@ function planMessage(plan: IrrigationPlan): LocalMessage {
     localId: `plan-${plan.plan_id}`,
     plan,
   }
+}
+
+function suggestionMessage(suggestion: IrrigationSuggestion): LocalMessage {
+  return {
+    role: 'tool',
+    content: null,
+    localId: `suggestion-${suggestion.suggestion_id}`,
+    suggestion,
+  }
+}
+
+function readWorkingMemory(detail: ConversationDetail | null | undefined): WorkingMemory | null {
+  return detail?.working_memory ?? null
+}
+
+function shouldHideAssistantMessage(messages: LocalMessage[], index: number) {
+  const message = messages[index]
+  if (message.role !== 'assistant' || !message.content?.trim()) {
+    return false
+  }
+
+  let turnStart = index
+  while (turnStart > 0 && messages[turnStart - 1]?.role !== 'user') {
+    turnStart -= 1
+  }
+
+  let turnEnd = index
+  while (turnEnd < messages.length - 1 && messages[turnEnd + 1]?.role !== 'user') {
+    turnEnd += 1
+  }
+
+  for (let cursor = turnStart; cursor <= turnEnd; cursor += 1) {
+    if (cursor === index) continue
+    if (messages[cursor]?.plan || messages[cursor]?.suggestion) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function MessageAvatar({ message }: { message: LocalMessage }) {
@@ -150,6 +206,13 @@ function MessageAvatar({ message }: { message: LocalMessage }) {
       </div>
     )
   }
+  if (message.suggestion) {
+    return (
+      <div className="message-avatar message-avatar-toolchain">
+        <Wrench size={13} />
+      </div>
+    )
+  }
   return <div className="message-avatar message-avatar-toolchain">工</div>
 }
 
@@ -157,14 +220,17 @@ function ToolTraceCard({ trace }: { trace: ToolProgressViewModel }) {
   const [expanded, setExpanded] = useState(false)
   const summary = trace.summary || (trace.status === 'running' ? '正在等待处理结果…' : '本轮没有处理步骤')
   const isRunning = trace.status === 'running'
-
-  const sections = [
-    {
-      key: 'progress',
-      label: '处理进度',
-      entries: trace.steps,
-    },
-  ]
+  const sections: Array<{ key: string; label: string; entries: ToolProgressStepViewModel[] }> = phaseOrder
+    .map((phase) => ({
+      key: phase,
+      label: phaseLabels[phase],
+      entries: trace.steps.filter((entry) => entry.phase === phase),
+    }))
+    .filter((section) => section.entries.length > 0)
+  const fallbackEntries = trace.steps.filter((entry) => !entry.phase)
+  if (fallbackEntries.length > 0) {
+    sections.push({ key: 'unclassified', label: '处理进度', entries: fallbackEntries })
+  }
 
   return (
     <div className="tool-trace-card">
@@ -243,8 +309,10 @@ export function ChatPanel({
   const [conversations, setConversations] = useState(initialConversations)
   const [activeConversation, setActiveConversation] = useState<ConversationDetail | null>(initialActiveConversation)
   const [messages, setMessages] = useState<LocalMessage[]>(
-    (initialActiveConversation?.messages || []).map((message) => toLocalMessage(message)),
+    (initialActiveConversation?.messages || []).map((message, index) => toLocalMessage(message, index)),
   )
+  const initialWorkingMemory = readWorkingMemory(initialActiveConversation)
+  const [workingMemory, setWorkingMemory] = useState<WorkingMemory | null>(initialWorkingMemory)
   const [input, setInput] = useState('')
   const [isPending, startTransition] = useTransition()
   const [isStreaming, setIsStreaming] = useState(false)
@@ -279,7 +347,9 @@ export function ChatPanel({
 
     const detail = (await response.json()) as ConversationDetail
     setActiveConversation(detail)
-    setMessages(detail.messages.map((message) => toLocalMessage(message)))
+    setMessages(detail.messages.map((message, index) => toLocalMessage(message, index)))
+    const nextMemory = readWorkingMemory(detail)
+    setWorkingMemory(nextMemory)
     return detail
   }
 
@@ -292,6 +362,7 @@ export function ChatPanel({
     const payload = await response.json()
     const conversation = payload.conversation as ConversationSummary
     setConversations((current) => [conversation, ...current])
+    setWorkingMemory(null)
     return loadConversation(conversation.session_id)
   }
 
@@ -334,6 +405,14 @@ export function ChatPanel({
       const existing = current.find((item) => item.plan?.plan_id === plan.plan_id)
       if (!existing) return [...current, planMessage(plan)]
       return current.map((item) => (item.plan?.plan_id === plan.plan_id ? { ...item, plan } : item))
+    })
+  }
+
+  function upsertSuggestion(suggestion: IrrigationSuggestion) {
+    setMessages((current) => {
+      const existing = current.find((item) => item.suggestion?.suggestion_id === suggestion.suggestion_id)
+      if (!existing) return [...current, suggestionMessage(suggestion)]
+      return current.map((item) => (item.suggestion?.suggestion_id === suggestion.suggestion_id ? { ...item, suggestion } : item))
     })
   }
 
@@ -419,7 +498,10 @@ export function ChatPanel({
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: conversationId, message: draft }),
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          message: draft,
+        }),
       })
       if (!response.ok || !response.body) {
         throw new Error(await response.text())
@@ -462,11 +544,25 @@ export function ChatPanel({
             if (isRenderablePlan(payload.plan)) {
               upsertPlan(payload.plan)
             }
+          } else if (payload.type === 'suggestion_result') {
+            upsertSuggestion(payload.suggestion)
           } else if (payload.type === 'error') {
             streamFailed = true
             setError(payload.content)
             setToolTraceStatus(toolTraceMessage.localId, 'error')
-          } else if (payload.type !== 'done') {
+          } else if (payload.type === 'done') {
+            if (payload.working_memory) {
+              setWorkingMemory(payload.working_memory)
+              setActiveConversation((current) =>
+                current
+                  ? {
+                      ...current,
+                      working_memory: payload.working_memory,
+                    }
+                  : current,
+              )
+            }
+          } else {
             const traceEntry = eventToTraceEntry(payload)
             if (traceEntry) {
               appendToolTraceEntry(toolTraceMessage.localId, traceEntry)
@@ -588,6 +684,60 @@ export function ChatPanel({
     )
   }
 
+  function renderSuggestion(suggestion: IrrigationSuggestion) {
+    const view = toSuggestionCardViewModel(suggestion)
+
+    return (
+      <div className="plan-card">
+        <div className="plan-card-head">
+          <div>
+            <strong>{view.title}</strong>
+            <p className="inline-muted">{view.summary}</p>
+          </div>
+          <div className="chat-header-meta">
+            <Badge tone={view.actionTone}>{view.actionLabel}</Badge>
+            <Badge tone={view.riskTone}>{view.riskLabel}</Badge>
+            <Badge>建议记录</Badge>
+          </div>
+        </div>
+        <div className="plan-reason-list">
+          {view.reasons.map((reason) => (
+            <div key={`${view.suggestionId}-${reason}`} className="plan-reason-item">
+              <span className="plan-reason-dot" />
+              <p>{reason}</p>
+            </div>
+          ))}
+        </div>
+        <div className="plan-evidence-grid">
+          {view.evidenceSections.map((section) => (
+            <div key={`${view.suggestionId}-${section.title}`} className="plan-evidence-card">
+              <span>{section.title}</span>
+              <div className="plan-evidence-list">
+                {section.items.map((item) => (
+                  <div key={`${section.title}-${item.label}`} className="plan-evidence-item">
+                    <label>{item.label}</label>
+                    <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="plan-safety-panel">
+          <span>风险与约束</span>
+          <div className="plan-safety-list">
+            {view.safetyItems.map((item) => (
+              <div key={`${view.suggestionId}-${item.label}-${item.detail}`} className="plan-safety-item">
+                <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.label}</strong>
+                <p>{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="chat-workspace">
       <ChatSidebar
@@ -631,7 +781,9 @@ export function ChatPanel({
                 <Badge><Waves size={12} /> Plan Timeline</Badge>
               </div>
             </div>
-            <p className="inline-muted">HydroAgent 会在对话中生成计划、请求审批并回写执行结果。</p>
+            <p className="inline-muted">
+              HydroAgent 会在对话中生成计划、请求审批并回写执行结果。
+            </p>
           </div>
           {activeConversation ? (
             <Button
@@ -658,31 +810,40 @@ export function ChatPanel({
                 <p>例如：检查当前土壤湿度，判断是否需要生成灌溉计划。</p>
               </div>
             ) : (
-              messages.map((message) => (
-                <article
-                  key={message.localId}
-                  className={cn(
-                    'message-row',
-                    `role-${message.role}`,
-                    message.toolTrace && 'message-card-tooltrace',
-                    message.plan && 'message-card-plan',
-                  )}
-                >
-                  <MessageAvatar message={message} />
-                  <div className="message-body">
-                    {message.role !== 'user' ? (
-                      <span className="message-role">{getMessageRoleLabel(message)}</span>
-                    ) : null}
-                    {message.plan ? renderPlan(message.plan) : null}
-                    {message.toolTrace ? <ToolTraceCard trace={message.toolTrace} /> : null}
-                    {!message.plan && message.content ? (
-                      <div className={cn('message-content', message.role === 'assistant' && 'markdown-content')}>
-                        {message.role === 'user' ? <p>{message.content}</p> : <MessageRichText content={message.content} />}
-                      </div>
-                    ) : null}
-                  </div>
-                </article>
-              ))
+              messages.map((message, index) => {
+                const hideAssistantMessage = shouldHideAssistantMessage(messages, index)
+                if (hideAssistantMessage && !message.plan && !message.suggestion && !message.toolTrace) {
+                  return null
+                }
+
+                return (
+                  <article
+                    key={message.localId}
+                    className={cn(
+                      'message-row',
+                      `role-${message.role}`,
+                      message.toolTrace && 'message-card-tooltrace',
+                      message.plan && 'message-card-plan',
+                      message.suggestion && 'message-card-plan',
+                    )}
+                  >
+                    <MessageAvatar message={message} />
+                    <div className="message-body">
+                      {message.role !== 'user' ? (
+                        <span className="message-role">{getMessageRoleLabel(message)}</span>
+                      ) : null}
+                      {message.plan ? renderPlan(message.plan) : null}
+                      {message.suggestion ? renderSuggestion(message.suggestion) : null}
+                      {message.toolTrace ? <ToolTraceCard trace={message.toolTrace} /> : null}
+                      {!message.plan && !message.suggestion && !hideAssistantMessage && message.content ? (
+                        <div className={cn('message-content', message.role === 'assistant' && 'markdown-content')}>
+                          {message.role === 'user' ? <p>{message.content}</p> : <MessageRichText content={message.content} />}
+                        </div>
+                      ) : null}
+                    </div>
+                  </article>
+                )
+              })
             )}
           </div>
         </div>

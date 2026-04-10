@@ -24,6 +24,7 @@ CHAT_TURN_CHANNEL = "hydro.chat.turn"
 TRACE_EVENT_CHANNEL = "hydro.trace.event"
 DECISION_CHANNEL = "hydro.decision"
 PLAN_EVENT_CHANNEL = "hydro.plan.event"
+WORKING_MEMORY_CHANNEL = "hydro.working.memory"
 
 AUDIT_THREAD_ID = "__hydro_audit__"
 
@@ -142,6 +143,8 @@ def _build_trace_step(event: dict[str, Any]) -> dict[str, Any]:
         "agent_name": event.get("agent_name"),
         "node_name": event.get("node_name"),
         "layer": event.get("layer") or "tool",
+        "phase": event.get("phase"),
+        "active_skills": event.get("active_skills") or [],
         "tone": tone,
     }
 
@@ -324,6 +327,15 @@ class HydroGraphPersistence:
             task_id=payload.get("event_id") or f"plan-event-{uuid.uuid4().hex[:12]}",
         )
 
+    async def record_working_memory(self, thread_id: str, payload: dict[str, Any]):
+        await self.initialize()
+        config = await self._get_anchor_or_latest_config_async(thread_id)
+        await self.async_saver.aput_writes(
+            config,
+            [(WORKING_MEMORY_CHANNEL, payload)],
+            task_id=payload.get("memory_id") or f"memory-{uuid.uuid4().hex[:12]}",
+        )
+
     def record_decision_sync(self, payload: dict[str, Any], thread_id: str | None = None):
         self._ensure_sync_initialized()
         target_thread = thread_id or AUDIT_THREAD_ID
@@ -352,6 +364,7 @@ class HydroGraphPersistence:
             return None
 
         summary = self._build_conversation_summary(thread_id, history)
+        working_memory = self._get_latest_working_memory(history)
         chat_turns = self._collect_channel_records(history, CHAT_TURN_CHANNEL)
         trace_payloads = self._build_trace_map(history, conversation_filter=thread_id)
         ordered_turns = sorted(
@@ -380,7 +393,7 @@ class HydroGraphPersistence:
             messages.extend(plan_messages_by_trace[trace_id])
         messages.extend(trailing_plan_messages)
 
-        return {"conversation": summary, "messages": messages}
+        return {"conversation": summary, "messages": messages, "working_memory": working_memory}
 
     async def list_tool_traces(self, limit: int = 20, conversation_id: str | None = None) -> list[dict[str, Any]]:
         await self.initialize()
@@ -404,6 +417,13 @@ class HydroGraphPersistence:
                     decisions.append(item)
         decisions.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return decisions[:limit]
+
+    async def get_working_memory(self, thread_id: str) -> dict[str, Any] | None:
+        await self.initialize()
+        history = await self._list_thread_history(thread_id)
+        if not history:
+            return None
+        return self._get_latest_working_memory(history)
 
     async def _list_thread_history(self, thread_id: str) -> list[CheckpointTuple]:
         history: list[CheckpointTuple] = []
@@ -503,29 +523,35 @@ class HydroGraphPersistence:
         for item in self._collect_channel_records(history, PLAN_EVENT_CHANNEL):
             if not isinstance(item, dict):
                 continue
-            plan = item.get("plan") if isinstance(item.get("plan"), dict) else None
-            plan_id = str(item.get("plan_id") or (plan or {}).get("plan_id") or "").strip()
-            if not plan_id or plan is None:
+            payload_kind = "plan"
+            payload = item.get("plan") if isinstance(item.get("plan"), dict) else None
+            payload_id = str(item.get("plan_id") or (payload or {}).get("plan_id") or "").strip()
+            if item.get("event_type") == "suggestion_result":
+                payload_kind = "suggestion"
+                payload = item.get("suggestion") if isinstance(item.get("suggestion"), dict) else None
+                payload_id = str(item.get("suggestion_id") or (payload or {}).get("suggestion_id") or "").strip()
+            if not payload_id or payload is None:
                 continue
 
-            created_at = str(item.get("created_at") or plan.get("updated_at") or plan.get("created_at") or "")
-            current = grouped.get(plan_id)
+            created_at = str(item.get("created_at") or payload.get("updated_at") or payload.get("created_at") or "")
+            current = grouped.get(payload_id)
             if current is None:
-                grouped[plan_id] = {
-                    "plan": plan,
+                grouped[payload_id] = {
+                    "kind": payload_kind,
+                    "payload": payload,
                     "created_at": created_at,
                     "latest_at": created_at,
                     "trace_id": str(item.get("trace_id") or "").strip() or None,
                 }
                 continue
 
-            # 会话里同一个计划卡片只保留一张，但内容始终用最新状态覆盖。
+            # 会话里同一个结构化结果只保留一张，但内容始终用最新状态覆盖。
             if created_at and (not current["created_at"] or created_at < current["created_at"]):
                 current["created_at"] = created_at
                 if item.get("trace_id"):
                     current["trace_id"] = str(item.get("trace_id"))
             if created_at >= current["latest_at"]:
-                current["plan"] = plan
+                current["payload"] = payload
                 current["latest_at"] = created_at
             if not current.get("trace_id") and item.get("trace_id"):
                 current["trace_id"] = str(item.get("trace_id"))
@@ -536,9 +562,12 @@ class HydroGraphPersistence:
             message = {
                 "role": "tool",
                 "content": None,
-                "plan": item["plan"],
                 "created_at": item["created_at"] or item["latest_at"],
             }
+            if item["kind"] == "suggestion":
+                message["suggestion"] = item["payload"]
+            else:
+                message["plan"] = item["payload"]
             trace_id = item.get("trace_id")
             if trace_id:
                 grouped_messages.setdefault(str(trace_id), []).append(message)
@@ -549,6 +578,17 @@ class HydroGraphPersistence:
             messages.sort(key=lambda item: str(item.get("created_at") or ""))
         trailing_messages.sort(key=lambda item: str(item.get("created_at") or ""))
         return grouped_messages, trailing_messages
+
+    def _get_latest_working_memory(self, history: list[CheckpointTuple]) -> dict[str, Any] | None:
+        memory_items = [
+            item
+            for item in self._collect_channel_records(history, WORKING_MEMORY_CHANNEL)
+            if isinstance(item, dict)
+        ]
+        if not memory_items:
+            return None
+        memory_items.sort(key=lambda item: str(item.get("last_updated_at") or item.get("created_at") or ""))
+        return memory_items[-1]
 
 
 _hydro_persistence: HydroGraphPersistence | None = None

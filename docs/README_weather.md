@@ -1,44 +1,27 @@
-# SmartIrrigation 天气查询模块
+# HydroAgent 天气模块说明
 
-本模块是 SmartIrrigation 智能灌溉系统的组件，提供天气数据查询和处理功能。
+天气模块为灌溉计划提供近期天气风险信息，重点用于判断未来 48 小时是否存在降雨，从而影响 `start` 或 `hold` 计划。
 
-## 功能特点
+## 当前实现
 
-- 基于高德地图天气API，提供准确的天气数据
-- 支持通过城市编码或城市名称查询天气
-- 获取实时天气和未来3-4天的天气预报
-- 数据存储与离线处理支持
-- 集成到灌溉决策系统，优化灌溉计划
+- 默认天气服务地址来自 `config.yaml` 或环境变量 `API_SERVICE_URL`。
+- 当前默认使用 Open-Meteo 形式的天气查询能力，不需要 API Key。
+- 模块保留对旧高德天气数据结构的兼容处理，便于历史测试和后续替换。
+- 如果天气服务不可用，计划服务会生成离线兜底摘要，保证灌溉计划流程继续运行并保持保守决策。
 
-## 快速开始
-
-### 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 配置API密钥
-
-在 `config.yaml` 文件中添加高德地图API密钥：
+## 配置示例
 
 ```yaml
 apis:
-  weather_api_key: "您的高德地图API密钥"
-  weather_service_url: "https://restapi.amap.com/v3/weather/weatherInfo"
+  weather_api_key: ""
+  weather_service_url: "https://api.open-meteo.com/v1/forecast"
 ```
 
-### 运行测试脚本
+也可以通过环境变量覆盖：
 
 ```bash
-# 测试API连接
-python test_weather.py --test
-
-# 查询指定城市的天气
-python test_weather.py --city 北京
-
-# 通过城市编码查询
-python test_weather.py --code 110101
+API_SERVICE_URL=https://api.open-meteo.com/v1/forecast
+WEATHER_API_KEY=
 ```
 
 ## 在项目中使用
@@ -46,25 +29,20 @@ python test_weather.py --code 110101
 ```python
 from src.data.data_processing import DataProcessingModule
 
-# 初始化数据处理模块
 data_processor = DataProcessingModule()
-
-# 获取天气数据
 weather = data_processor.get_weather_by_city_name("北京")
-
-# 根据天气数据调整灌溉计划
-temperature = float(weather["lives"]["temperature"])
-if temperature > 30:
-    print("温度较高，增加灌溉量")
-elif temperature < 10:
-    print("温度较低，减少灌溉量")
+print(weather.get("city"))
+print(weather.get("forecast", []))
 ```
 
-## 更多信息
+在主业务链路中，`src/services/irrigation_service.py` 会调用天气模块生成 `weather_summary`。如果未来 48 小时存在降雨且土壤湿度没有进入紧急区间，系统会建议暂缓灌溉。
 
-详细的API使用说明和数据结构请参考 [天气API使用文档](docs/weather_api_usage.md)。
+## 毕设表述建议
 
-## 参考资料
+论文中建议描述为：
 
-- [高德地图开放平台](https://lbs.amap.com/)
-- [高德地图天气API文档](https://lbs.amap.com/api/webservice/guide/api/weatherinfo)
+```text
+系统通过天气模块获取近期天气预报，并将降雨信号作为灌溉计划安全审查的一部分。当天气数据不可用时，系统采用保守兜底策略，避免因外部服务异常导致计划链路中断。
+```
+
+不要把当前实现描述为“已稳定接入生产级气象平台”。如果答辩需要展示真实天气数据，应提前确认网络环境和接口可用性。

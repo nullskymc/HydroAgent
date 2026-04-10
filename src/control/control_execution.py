@@ -4,9 +4,10 @@
 import datetime
 from typing import Dict, Any, Optional
 
+from src.database.models import SessionLocal
 from src.logger_config import logger
-from src.config import config
 from src.exceptions.exceptions import IrrigationDeviceError
+from src.services.system_settings_service import get_default_duration_minutes
 
 class ControlExecutionModule:
     """
@@ -29,7 +30,7 @@ class ControlExecutionModule:
         :raises: IrrigationDeviceError 如果设备控制失败
         """
         if duration_minutes is None:
-            duration_minutes = config.IRRIGATION_STRATEGY.get("default_duration_minutes", 30)
+            duration_minutes = _load_default_duration_minutes()
         
         if self._device_status == "running":
             message = "灌溉已经在运行中。"
@@ -157,3 +158,11 @@ class ControlExecutionModule:
             pass
         except Exception as e:
             logger.error(f"存储灌溉日志到数据库失败: {str(e)}", exc_info=True)
+
+
+def _load_default_duration_minutes() -> int:
+    db = SessionLocal()
+    try:
+        return get_default_duration_minutes(db)
+    finally:
+        db.close()

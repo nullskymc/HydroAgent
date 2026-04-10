@@ -1,47 +1,54 @@
-# 使用官方Python镜像作为构建环境
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
 
-# 设置工作目录
-WORKDIR /app
+FROM python:3.12-slim AS builder
 
-# 安装系统依赖和中文字体
+WORKDIR /build
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    curl \
     gcc \
-    fonts-wqy-microhei \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制requirements文件
 COPY requirements.txt .
+RUN python -m pip wheel --wheel-dir /wheels -r requirements.txt
 
-# 升级pip并安装依赖
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+FROM python:3.12-slim AS runtime
 
-# 复制应用程序代码
-COPY src/ /app/src/
+WORKDIR /app
 
-# 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
 
-# 创建日志目录
-RUN mkdir -p /app/logs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-wqy-microhei \
+    && rm -rf /var/lib/apt/lists/*
 
-# 设置运行用户
-RUN groupadd -r appuser && useradd -r -g appuser appuser \
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --no-cache-dir --no-compile /wheels/* \
+    # 清理 Python 包内测试目录和字节码，避免运行时镜像携带构建/测试产物。
+    && find /usr/local/lib/python3.12/site-packages -depth \
+        \( -type d \( -name tests -o -name test -o -name __pycache__ \) \
+        -o -type f \( -name "*.pyc" -o -name "*.pyo" \) \) -exec rm -rf '{}' + \
+    && rm -rf /wheels /root/.cache/pip
+
+COPY src/ /app/src/
+
+RUN mkdir -p /app/logs \
+    && groupadd -r appuser \
+    && useradd -r -g appuser appuser \
     && chown -R appuser:appuser /app
+
 USER appuser
 
-# 暴露Gradio服务的端口
 EXPOSE 7860
 
-# 设置健康检查
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:7860/api/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3).read()" || exit 1
 
-# 启动应用
 CMD ["python", "/app/src/main.py"]

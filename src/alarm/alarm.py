@@ -3,8 +3,9 @@
 """
 from typing import Optional
 
+from src.database.models import SessionLocal
 from src.logger_config import logger
-from src.config import config
+from src.services.system_settings_service import get_alarm_settings
 
 class AlarmModule:
     """
@@ -17,8 +18,9 @@ class AlarmModule:
         :param alarm_threshold: 触发报警的土壤湿度阈值，默认使用配置
         :param enabled: 是否启用报警功能，默认使用配置
         """
-        self.alarm_threshold = alarm_threshold if alarm_threshold is not None else config.ALARM_THRESHOLD_SOIL_MOISTURE
-        self.enabled = enabled if enabled is not None else config.ALARM_ENABLED
+        threshold, alarm_enabled = _load_alarm_defaults()
+        self.alarm_threshold = alarm_threshold if alarm_threshold is not None else threshold
+        self.enabled = enabled if enabled is not None else alarm_enabled
         logger.info(f"AlarmModule initialized. Threshold: {self.alarm_threshold}%, Enabled: {self.enabled}")
     
     def check_humidity(self, soil_moisture: float) -> bool:
@@ -104,3 +106,11 @@ class AlarmModule:
         """
         logger.info(f"模拟发送短信到 {phone_number}")
         # 实际应用中可以使用Twilio或其他短信API服务
+
+
+def _load_alarm_defaults() -> tuple[float, bool]:
+    db = SessionLocal()
+    try:
+        return get_alarm_settings(db)
+    finally:
+        db.close()

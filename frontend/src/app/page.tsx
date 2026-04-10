@@ -1,7 +1,6 @@
 import { AppShell } from '@/components/app-shell'
 import { AnalyticsOverviewPanel } from '@/components/analytics-overview'
 import { ConsoleEmptyState, ConsoleSectionHeader } from '@/components/console-primitives'
-import { DashboardActions } from '@/components/dashboard-actions'
 import { DashboardChatLauncher } from '@/components/dashboard-chat-launcher'
 import { Badge, StatusDot } from '@/components/ui/badge'
 import { requirePermission } from '@/lib/auth'
@@ -18,6 +17,18 @@ type ZoneView = {
   deficit: number
   latestPlan?: IrrigationPlan
   actuator?: Zone['actuators'][number]
+}
+
+function isPendingPlan(plan?: IrrigationPlan | null) {
+  return plan?.status === 'pending_approval'
+}
+
+function isApprovedPlan(plan?: IrrigationPlan | null) {
+  return plan?.status === 'approved'
+}
+
+function isExecutedPlan(plan?: IrrigationPlan | null) {
+  return plan?.status === 'executing' || plan?.status === 'completed'
 }
 
 function getRiskTone(value?: string | null): Tone {
@@ -86,9 +97,9 @@ function buildOverviewFromDashboard(
     range: '7d',
     kpis: {
       zone_count: dashboard.zones.length,
-      pending_plan_count: dashboard.plans.filter((plan) => plan.approval_status === 'pending').length,
+      pending_plan_count: dashboard.plans.filter((plan) => isPendingPlan(plan)).length,
       active_alert_count: zoneRows.filter((item) => item.latestPlan?.risk_level === 'high' || item.deficit > 5).length,
-      executed_plan_count: dashboard.plans.filter((plan) => plan.execution_status === 'executed').length,
+      executed_plan_count: dashboard.plans.filter((plan) => isExecutedPlan(plan)).length,
     },
     soil_trend: {
       zone_id: 'dashboard',
@@ -102,10 +113,10 @@ function buildOverviewFromDashboard(
       range: '7d',
       items: [
         { stage: 'generated', count: dashboard.plans.length },
-        { stage: 'pending', count: dashboard.plans.filter((plan) => plan.approval_status === 'pending').length },
-        { stage: 'approved', count: dashboard.plans.filter((plan) => plan.approval_status === 'approved').length },
-        { stage: 'executed', count: dashboard.plans.filter((plan) => plan.execution_status === 'executed').length },
-        { stage: 'completed_or_rejected', count: dashboard.plans.filter((plan) => ['executed', 'rejected'].includes(plan.status)).length },
+        { stage: 'pending', count: dashboard.plans.filter((plan) => isPendingPlan(plan)).length },
+        { stage: 'approved', count: dashboard.plans.filter((plan) => isApprovedPlan(plan)).length },
+        { stage: 'executed', count: dashboard.plans.filter((plan) => isExecutedPlan(plan)).length },
+        { stage: 'completed_or_rejected', count: dashboard.plans.filter((plan) => ['completed', 'rejected', 'superseded', 'cancelled'].includes(plan.status)).length },
       ],
     },
     alert_trend: {
@@ -132,21 +143,16 @@ export default async function DashboardPage() {
   ])
   const sensorRows = (dashboard.sensors?.sensors || []) as Array<Record<string, unknown>>
   const forecastRows = dashboard.weather?.forecast || []
-  const pendingPlans = dashboard.plans.filter((item) => item.approval_status === 'pending')
+  const pendingPlans = dashboard.plans.filter((item) => isPendingPlan(item))
   const zoneRows = dashboard.zones.map((zone) => buildZoneView(zone, sensorRows, dashboard.plans))
   const running = dashboard.irrigation?.status === 'running'
   const backendOnline = dashboard.backendReachable
   const currentMode = running ? '运行中' : '待命'
   const averageSoil = dashboard.sensors?.average.soil_moisture ?? null
   const rainfall = dashboard.sensors?.average.rainfall ?? null
-  const attentionCount = zoneRows.filter((zone) => zone.deficit > 5 || zone.latestPlan?.approval_status === 'pending').length
+  const attentionCount = zoneRows.filter((zone) => zone.deficit > 5 || isPendingPlan(zone.latestPlan)).length
   const overview = buildOverviewFromDashboard(zoneRows, dashboard)
   const lastUpdated = formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp)
-  const controlLockedReason = !backendOnline
-    ? '核心离线时，所有灌溉操作保持只读。'
-    : zoneRows.length === 0
-      ? '暂无分区数据，不能执行灌溉。'
-      : null
 
   const telemetryItems = [
     {
@@ -189,50 +195,6 @@ export default async function DashboardPage() {
 
         <div className="console-stage">
           <div className="console-main">
-            <section className="console-section console-control-section">
-              <ConsoleSectionHeader
-                eyebrow="控制"
-                title="执行状态"
-                meta={
-                  <>
-                    <Badge tone={settings?.alarm_enabled ? 'success' : 'default'}>
-                      告警 {settings?.alarm_enabled ? '启用' : '关闭'}
-                    </Badge>
-                    <Badge>默认 {settings?.default_duration_minutes || '--'} 分钟</Badge>
-                  </>
-                }
-              />
-              <div className="console-control-grid">
-                <div className="console-control-copy">
-                  <div className="console-status-band">
-                    <div className="console-status-item">
-                      <span>模式</span>
-                      <strong>{currentMode}</strong>
-                    </div>
-                    <div className="console-status-item">
-                      <span>执行状态</span>
-                      <strong>{dashboard.irrigation?.status || '--'}</strong>
-                    </div>
-                    <div className="console-status-item">
-                      <span>剩余时长</span>
-                      <strong>{formatNumber(dashboard.irrigation?.remaining_minutes ?? null, ' 分钟')}</strong>
-                    </div>
-                  </div>
-                  <div className="console-policy-strip">
-                    <span>策略边界</span>
-                    <strong>start 必须基于计划</strong>
-                    <p>{controlLockedReason || '系统在线时，启动命令仍需遵循计划与审批边界。'}</p>
-                  </div>
-                </div>
-                <DashboardActions
-                  running={running}
-                  defaultDuration={settings?.default_duration_minutes || 30}
-                  disabled={Boolean(controlLockedReason)}
-                  disabledReason={controlLockedReason}
-                />
-              </div>
-            </section>
-
             <section className="console-section">
               <ConsoleSectionHeader
                 eyebrow="分区"
@@ -255,7 +217,7 @@ export default async function DashboardPage() {
                     <div className="console-zone-cell">
                       <strong>{item.zone.name}</strong>
                       <p>{item.zone.location}</p>
-                      <em>计划 {item.latestPlan?.approval_status || '无计划'}</em>
+                      <em>计划 {item.latestPlan?.status || '无计划'}</em>
                     </div>
                     <span>{formatNumber(item.soilMoisture, '%')}</span>
                     <span>{item.threshold}%</span>

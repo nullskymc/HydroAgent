@@ -97,19 +97,17 @@ class TestChatPlanPersistence(unittest.IsolatedAsyncioTestCase):
             "conv-1",
             {
                 "event_id": "planevt-3",
-                "event_type": "plan_proposed",
-                "plan_id": "plan_a",
+                "event_type": "suggestion_result",
+                "suggestion_id": "suggestion_a",
                 "trace_id": "trace_2",
                 "created_at": "2026-04-03T11:00:01+00:00",
-                "plan": {
-                    "plan_id": "plan_a",
+                "suggestion": {
+                    "suggestion_id": "suggestion_a",
                     "zone_id": "zone_a",
                     "conversation_id": "conv-1",
-                    "status": "ready",
-                    "approval_status": "not_required",
-                    "execution_status": "not_started",
                     "proposed_action": "hold",
                     "risk_level": "low",
+                    "urgency": "normal",
                     "recommended_duration_minutes": 0,
                 },
             },
@@ -146,7 +144,9 @@ class TestChatPlanPersistence(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(payload)
         plan_ids = [message["plan"]["plan_id"] for message in payload["messages"] if message.get("plan")]
-        self.assertEqual(plan_ids, ["plan_a", "plan_b"])
+        suggestion_ids = [message["suggestion"]["suggestion_id"] for message in payload["messages"] if message.get("suggestion")]
+        self.assertEqual(plan_ids, ["plan_b"])
+        self.assertEqual(suggestion_ids, ["suggestion_a"])
 
 
 if __name__ == "__main__":

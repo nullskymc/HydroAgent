@@ -1,0 +1,233 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e376] [cursor=pointer]:
+    - button "Open Next.js Dev Tools" [ref=e377]:
+      - img [ref=e378]
+    - generic [ref=e381]:
+      - button "Open issues overlay" [ref=e382]:
+        - generic [ref=e383]:
+          - generic [ref=e384]: "0"
+          - generic [ref=e385]: "1"
+        - generic [ref=e386]: Issue
+      - button "Collapse issues badge" [ref=e387]:
+        - img [ref=e388]
+  - generic [ref=e390]:
+    - banner [ref=e391]:
+      - generic [ref=e392]:
+        - link "H HydroAgent 水利灌溉智能体系统" [ref=e393] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e394]: H
+          - generic [ref=e395]:
+            - paragraph [ref=e396]: HydroAgent
+            - heading "水利灌溉智能体系统" [level=1] [ref=e397]
+        - navigation [ref=e398]:
+          - link "运营总览" [ref=e399] [cursor=pointer]:
+            - /url: /
+            - generic [ref=e400]:
+              - img [ref=e401]
+              - generic [ref=e408]: 运营总览
+          - link "数据大屏" [ref=e409] [cursor=pointer]:
+            - /url: /visualization
+            - generic [ref=e410]:
+              - img [ref=e411]
+              - generic [ref=e413]: 数据大屏
+          - link "智能对话" [ref=e414] [cursor=pointer]:
+            - /url: /chat
+            - generic [ref=e415]:
+              - img [ref=e416]
+              - generic [ref=e419]: 智能对话
+          - link "运营中心" [ref=e420] [cursor=pointer]:
+            - /url: /operations
+            - generic [ref=e421]:
+              - img [ref=e422]
+              - generic [ref=e424]: 运营中心
+          - link "资产中心" [ref=e425] [cursor=pointer]:
+            - /url: /assets
+            - generic [ref=e426]:
+              - img [ref=e427]
+              - generic [ref=e437]: 资产中心
+          - link "知识库" [ref=e438] [cursor=pointer]:
+            - /url: /knowledge
+            - generic [ref=e439]:
+              - img [ref=e440]
+              - generic [ref=e442]: 知识库
+          - link "告警中心" [ref=e443] [cursor=pointer]:
+            - /url: /alerts
+            - generic [ref=e444]:
+              - img [ref=e445]
+              - generic [ref=e448]: 告警中心
+          - link "用户与角色" [ref=e449] [cursor=pointer]:
+            - /url: /users
+            - generic [ref=e450]:
+              - img [ref=e451]
+              - generic [ref=e456]: 用户与角色
+          - link "报表中心" [ref=e457] [cursor=pointer]:
+            - /url: /reports
+            - generic [ref=e458]:
+              - img [ref=e459]
+              - generic [ref=e461]: 报表中心
+          - link "审计记录" [ref=e462] [cursor=pointer]:
+            - /url: /history
+            - generic [ref=e463]:
+              - img [ref=e464]
+              - generic [ref=e468]: 审计记录
+          - link "系统设置" [ref=e469] [cursor=pointer]:
+            - /url: /settings
+            - generic [ref=e470]:
+              - img [ref=e471]
+              - generic [ref=e474]: 系统设置
+        - generic [ref=e475]:
+          - generic [ref=e476]:
+            - strong [ref=e477]: 系统管理员
+            - generic [ref=e478]: admin
+          - button "退出" [ref=e479] [cursor=pointer]
+    - main [ref=e480]:
+      - generic [ref=e481]:
+        - generic [ref=e482]: Smart Irrigation / Operation Center
+        - generic [ref=e483]: 实时运行中枢
+      - generic [ref=e485]:
+        - complementary [ref=e486]:
+          - generic [ref=e487]:
+            - generic [ref=e489]:
+              - paragraph [ref=e490]: HydroAgent
+              - generic [ref=e491]:
+                - heading "智能对话" [level=2] [ref=e492]
+                - button "新建对话" [ref=e493] [cursor=pointer]:
+                  - img [ref=e494]
+              - paragraph [ref=e496]: 围绕分区、计划、审批和执行的统一线程。
+            - generic [ref=e497]:
+              - generic [ref=e498]:
+                - generic [ref=e499]: 快捷动作
+                - strong [ref=e500]: "3"
+              - generic [ref=e501]:
+                - button "为 soil moisture 最低的分区生成灌溉计划" [ref=e502]:
+                  - generic [ref=e503]: 为 soil moisture 最低的分区生成灌溉计划
+                - button "检查待审批计划并说明风险" [ref=e504]:
+                  - generic [ref=e505]: 检查待审批计划并说明风险
+                - button "查看已批准计划是否可以执行" [ref=e506]:
+                  - generic [ref=e507]: 查看已批准计划是否可以执行
+            - generic [ref=e508]:
+              - generic [ref=e509]:
+                - generic [ref=e510]: 最近会话
+                - strong [ref=e511]: "13"
+              - generic [ref=e512]:
+                - generic [ref=e747]:
+                  - button "新对话 04-09 18:20" [ref=e748]:
+                    - strong [ref=e749]: 新对话
+                    - paragraph [ref=e750]: 04-09 18:20
+                  - button "删除会话 新对话" [ref=e751] [cursor=pointer]:
+                    - img [ref=e752]
+                - generic [ref=e513]:
+                  - button "你好 04-09 16:00" [ref=e514]:
+                    - strong [ref=e515]: 你好
+                    - paragraph [ref=e516]: 04-09 16:00
+                  - button "删除会话 你好" [ref=e517] [cursor=pointer]:
+                    - img [ref=e518]
+                - generic [ref=e521]:
+                  - button "预测未来的湿度趋势 04-08 11:34" [ref=e522]:
+                    - strong [ref=e523]: 预测未来的湿度趋势
+                    - paragraph [ref=e524]: 04-08 11:34
+                  - button "删除会话 预测未来的湿度趋势" [ref=e525] [cursor=pointer]:
+                    - img [ref=e526]
+                - generic [ref=e529]:
+                  - button "预测当前灌区的湿度趋势 04-08 11:13" [ref=e530]:
+                    - strong [ref=e531]: 预测当前灌区的湿度趋势
+                    - paragraph [ref=e532]: 04-08 11:13
+                  - button "删除会话 预测当前灌区的湿度趋势" [ref=e533] [cursor=pointer]:
+                    - img [ref=e534]
+                - generic [ref=e537]:
+                  - button "检查待审批计划并说明风险 04-03 22:13" [ref=e538]:
+                    - strong [ref=e539]: 检查待审批计划并说明风险
+                    - paragraph [ref=e540]: 04-03 22:13
+                  - button "删除会话 检查待审批计划并说明风险" [ref=e541] [cursor=pointer]:
+                    - img [ref=e542]
+                - generic [ref=e545]:
+                  - button "health-check 04-03 22:13" [ref=e546]:
+                    - strong [ref=e547]: health-check
+                    - paragraph [ref=e548]: 04-03 22:13
+                  - button "删除会话 health-check" [ref=e549] [cursor=pointer]:
+                    - img [ref=e550]
+                - generic [ref=e553]:
+                  - button "检查待审批计划并说明风险 04-03 17:14" [ref=e554]:
+                    - strong [ref=e555]: 检查待审批计划并说明风险
+                    - paragraph [ref=e556]: 04-03 17:14
+                  - button "删除会话 检查待审批计划并说明风险" [ref=e557] [cursor=pointer]:
+                    - img [ref=e558]
+                - generic [ref=e561]:
+                  - button "frontend stream debug 04-03 17:13" [ref=e562]:
+                    - strong [ref=e563]: frontend stream debug
+                    - paragraph [ref=e564]: 04-03 17:13
+                  - button "删除会话 frontend stream debug" [ref=e565] [cursor=pointer]:
+                    - img [ref=e566]
+                - generic [ref=e569]:
+                  - button "检查待审批计划并说明风险 04-03 17:11" [ref=e570]:
+                    - strong [ref=e571]: 检查待审批计划并说明风险
+                    - paragraph [ref=e572]: 04-03 17:11
+                  - button "删除会话 检查待审批计划并说明风险" [ref=e573] [cursor=pointer]:
+                    - img [ref=e574]
+                - generic [ref=e577]:
+                  - button "生成未来三天的计划 04-03 17:05" [ref=e578]:
+                    - strong [ref=e579]: 生成未来三天的计划
+                    - paragraph [ref=e580]: 04-03 17:05
+                  - button "删除会话 生成未来三天的计划" [ref=e581] [cursor=pointer]:
+                    - img [ref=e582]
+                - generic [ref=e585]:
+                  - button "生成未来三天的计划 04-03 17:03" [ref=e586]:
+                    - strong [ref=e587]: 生成未来三天的计划
+                    - paragraph [ref=e588]: 04-03 17:03
+                  - button "删除会话 生成未来三天的计划" [ref=e589] [cursor=pointer]:
+                    - img [ref=e590]
+                - generic [ref=e593]:
+                  - button "生成未来三天的计划 04-03 16:48" [ref=e594]:
+                    - strong [ref=e595]: 生成未来三天的计划
+                    - paragraph [ref=e596]: 04-03 16:48
+                  - button "删除会话 生成未来三天的计划" [ref=e597] [cursor=pointer]:
+                    - img [ref=e598]
+                - generic [ref=e601]:
+                  - button "列出当前灌溉分区 04-03 16:46" [ref=e602]:
+                    - strong [ref=e603]: 列出当前灌溉分区
+                    - paragraph [ref=e604]: 04-03 16:46
+                  - button "删除会话 列出当前灌溉分区" [ref=e605] [cursor=pointer]:
+                    - img [ref=e606]
+        - generic [ref=e609]:
+          - generic [ref=e610]:
+            - generic [ref=e611]:
+              - paragraph [ref=e612]: Supervisor Thread
+              - generic [ref=e613]:
+                - heading "新对话" [level=2] [ref=e755]
+                - generic [ref=e615]:
+                  - generic [ref=e616]: 流式
+                  - generic [ref=e618]:
+                    - img [ref=e619]
+                    - text: Direct Tools
+                  - generic [ref=e623]:
+                    - img [ref=e624]
+                    - text: Plan Timeline
+              - paragraph [ref=e628]: HydroAgent 会在对话中生成计划、请求审批并回写执行结果。
+            - button [ref=e629] [cursor=pointer]:
+              - img [ref=e630]
+          - generic [ref=e634]:
+            - article [ref=e762]:
+              - generic [ref=e763]: 你
+              - paragraph [ref=e766]: 为 soil moisture 最低的分区生成灌溉计划
+            - article [ref=e767]:
+              - img [ref=e769]
+              - generic [ref=e773]:
+                - generic [ref=e774]: 处理进度
+                - button "正在分析灌溉条件 1 步 系统正在处理当前请求。" [ref=e776]:
+                  - generic [ref=e777]:
+                    - generic [ref=e778]:
+                      - img [ref=e780]
+                      - strong [ref=e782]: 正在分析灌溉条件
+                      - generic [ref=e783]: 1 步
+                    - paragraph [ref=e784]: 系统正在处理当前请求。
+                  - img [ref=e785]
+            - article [ref=e787]:
+              - generic [ref=e788]: H
+              - generic [ref=e790]: HydroAgent
+          - generic [ref=e738]:
+            - generic [ref=e740]:
+              - textbox "输入分区灌溉问题、计划生成请求、审批指令或执行指令" [ref=e741]
+              - button [disabled] [ref=e742]:
+                - img [ref=e743]
+            - paragraph [ref=e745]: 支持计划生成、审批、执行回执与审计
+  - alert [ref=e746]

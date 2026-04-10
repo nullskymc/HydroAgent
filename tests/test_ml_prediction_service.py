@@ -15,6 +15,7 @@ try:
         _weather_summary_cache,
         bootstrap_default_zones,
         create_plan,
+        generate_plan_result,
         get_zone_status,
         list_zones,
     )
@@ -189,9 +190,10 @@ class TestMlPredictionService(unittest.TestCase):
             "src.services.irrigation_service.predict_zone_soil_moisture",
             return_value=prediction,
         ):
-            plan = create_plan(self.db, self.zone.zone_id, trigger="test", requested_by="tester")
+            result = generate_plan_result(self.db, self.zone.zone_id, trigger="test", requested_by="tester")
 
-        self.assertEqual(plan.proposed_action, "hold")
+        self.assertTrue(result["suggestion_only"])
+        self.assertEqual(result["suggestion"]["proposed_action"], "hold")
 
     def test_mcp_prediction_tool_returns_json(self):
         import src.mcp_server as mcp_server

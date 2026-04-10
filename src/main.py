@@ -32,6 +32,7 @@ from src.services import bootstrap_default_zones
 from src.services.alert_service import ensure_alert_rules
 from src.services.asset_service import ensure_sensor_devices
 from src.services.auth_service import ensure_auth_seed
+from src.services.system_settings_service import ensure_system_settings, get_collection_interval_minutes
 
 # ============================================================
 #  FastAPI 应用配置
@@ -80,6 +81,7 @@ async def startup_event():
         init_db()
         db = SessionLocal()
         try:
+            ensure_system_settings(db)
             bootstrap_default_zones(db)
             ensure_sensor_devices(db)
             ensure_auth_seed(db)
@@ -158,7 +160,11 @@ def _run_auto_check():
 
 def _start_auto_check_scheduler():
     """启动定时任务调度器（每小时检查一次）"""
-    interval_minutes = config.DATA_COLLECTION_INTERVAL_MINUTES
+    db = SessionLocal()
+    try:
+        interval_minutes = get_collection_interval_minutes(db)
+    finally:
+        db.close()
     
     def scheduler_thread():
         schedule.every(interval_minutes).minutes.do(_run_auto_check)

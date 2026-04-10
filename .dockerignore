@@ -21,6 +21,12 @@ env/
 venv/
 ENV/
 
+# 前端依赖和构建产物
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+
 # 测试文件
 tests/
 test_*.py
@@ -31,6 +37,13 @@ README.md
 LICENSE
 test_report.txt
 .DS_Store
+
+# 本地运行态数据
+.hydro_workspace/
+logs/
+irrigation_db.db
+*.sqlite
+*.sqlite3
 
 # IDE相关
 .idea/

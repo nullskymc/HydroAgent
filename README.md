@@ -1,65 +1,110 @@
-# HydroAgent — 水利灌溉智能体
+# HydroAgent — 水利灌溉智能体系统
 
-HydroAgent（原名 SmartIrrigation）是一个面向现代农业的智能化灌溉决策与控制系统。集成了数据采集与处理、机器学习分析、LLM 智能脑决策、自动控制和报警等模块。并且拥有基于 React 和 Vite 构建的、全新 Vercel 极简设计风格的现代前端监控终端，旨在将前沿的人工智能技术与实际农业生产深度结合。
+HydroAgent（原 SmartIrrigation）是一个面向毕业设计与原型验证场景的智能灌溉决策平台。系统以 FastAPI 后端为核心，结合 SQLAlchemy 数据模型、分区化灌溉计划、审批与执行链路、RBAC 权限、告警、审计、报表、知识库和 LLM 智能对话，并提供基于 Next.js 的现代化运营控制台。
 
-## 主要特性
+当前项目定位是“智能灌溉仿真与决策原型系统”：传感器采集、部分执行器控制和 ML 预测默认使用仿真实现，便于在没有真实硬件的毕业设计环境中完成完整业务演示。真实硬件接入可以在现有数据采集、执行器服务和控制接口基础上替换适配层。
 
-- **配置管理**：支持多环境配置，灵活集成数据库、API、传感器等参数。
-- **数据采集与处理**：自动采集土壤、气象等多维度数据，内置数据清洗与异常检测。
-- **数据库支持**：基于 SQLAlchemy，支持主流数据库，结构化存储传感器、天气、灌溉日志等信息。
-- **机器学习预测**：可集成 LSTM 等模型，预测土壤湿度趋势，辅助决策。
-- **智能体决策**：LLM 智能体解析自然语言指令，自动决策灌溉与报警。
-- **自动控制与报警**：支持软/硬件灌溉设备控制，阈值报警，支持邮件/短信等扩展。
-- **现代可视化前台**：基于 React 18 + Vite 开发，应用完整的 Vercel 极简设计系统，提供深色模式响应式监控大屏与 Agent 交互端。
-- **模块化设计**：各功能高度解耦，便于扩展和维护。
-- **完善测试**：覆盖核心功能的单元与集成测试。
+## 核心能力
+
+- **分区化灌溉决策**：按农田分区维护传感器、执行器、作物阈值和默认灌溉时长。
+- **结构化计划闭环**：计划包含证据、风险等级、安全审查、建议动作和建议时长；启动灌溉必须经过计划与审批链路。
+- **审批与执行审计**：支持计划生成、批准、拒绝、执行、手动覆盖、执行日志和后台审计记录。
+- **安全策略约束**：传感器缺失、执行器不可用、未来 48 小时降雨等情况会进入暂缓或高风险路径，避免自动执行。
+- **数据与天气处理**：支持传感器数据清洗、天气查询、天气风险摘要和离线兜底数据。
+- **AI 对话与工具调用**：通过 LLM 智能体、MCP 工具和持久化会话支持自然语言查询、计划生成和过程追踪。
+- **后台管理能力**：包含 RBAC 权限、用户角色、资产管理、告警处理、知识库、报表导出、系统设置和模型配置。
+- **Next.js 运营控制台**：提供总览、对话、运营、资产、知识库、告警、用户、报表、历史和设置页面。
+
+## 技术栈
+
+- 后端：Python 3.12 推荐、FastAPI、SQLAlchemy、SQLite / PostgreSQL / MySQL、LangChain、FastMCP、OpenAI SDK。
+- 前端：Next.js、React、TypeScript、ECharts、ESLint。
+- 存储：业务数据使用 SQLAlchemy；对话与工具轨迹使用 LangGraph SQLite persistence；知识库支持 Chroma 向量存储。
+- 部署：本地脚本、Dockerfile、docker-compose、GitHub Actions 镜像构建工作流。
 
 ## 目录结构
 
-- `src/`  主程序源码
-  - `config/` 配置管理
-  - `database/` 数据库模型与操作
-  - `exceptions/` 异常定义
-  - `data/` 数据采集与处理
-  - `ml/` 机器学习模型
-  - `llm/` 智能体
-  - `control/` 控制执行
-  - `alarm/` 报警模块
-  - `ui/` 用户界面
-  - `main.py` 主入口
-  - `logger_config.py` 日志配置
-- `tests/`  测试用例
-- `requirements.txt` 后端依赖资源
-- `frontend/` React 现代前端根目录
-- `task.md` 详细开发任务清单
+- `src/`：后端服务源码。
+  - `main.py`：FastAPI 应用入口。
+  - `api.py`：核心 API，包括对话、分区、计划、灌溉、设置、状态等。
+  - `database/`：SQLAlchemy 数据模型与数据库初始化。
+  - `services/`：业务服务层，包括灌溉计划、资产、告警、RBAC、认证、报表、分析。
+  - `data/`：传感器采集与天气数据处理。
+  - `llm/`：智能体、工具参数解析、对话持久化和中间件。
+  - `knowledge/`：知识库文档与检索服务。
+  - `ml/`：土壤湿度预测模型接口，当前默认仿真实现。
+  - `control/`、`ui/`：早期兼容模块，当前主流程以 `services/irrigation_service.py` 和 Next.js 前端为准。
+- `frontend/`：Next.js 前端控制台与 API 代理路由。
+- `tests/`：历史测试与部分新架构测试。由于架构已经大改，旧测试需要重新梳理后再作为最终验收依据。
+- `docs/`：毕业设计、部署、天气、架构和演示说明。
+- `config.template.yaml`：配置模板。实际 `config.yaml` 可能包含本地密钥，不应提交到仓库。
 
 ## 快速开始
 
-1. 安装依赖：`pip install -r requirements.txt`
-2. 配置数据库和环境变量（可选 .env 或 config.yaml）
-   - 请勿上传包含敏感信息的 config.yaml 到仓库，参考 `config.template.yaml` 创建你的配置文件。
-   - `config.template.yaml` 支持 `model_name` 字段用于 LangChain 智能体模型选择，例如：
-     ```yaml
-     model_name: gpt-4o  # 可选 gpt-4, gpt-3.5-turbo 等
-     ```
-3. 启动前端终端：
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-4. 初始化数据库并启动核心调度中心：`python src/main.py --init-db`
-5. 日常启动后端：`python src/main.py`
+### 一键本地启动
 
-## 适用场景
+```bash
+./start.sh
+```
 
-- 农田、温室、园艺等需智能灌溉的场景
-- 需要数据驱动决策和远程监控的农业项目
+默认后端地址为 `http://127.0.0.1:7860`，前端地址为 `http://127.0.0.1:3000`。
 
-## 贡献与反馈
+### 分别启动后端和前端
 
-欢迎提交 Issue、PR 或建议！
+```bash
+./start-backend.sh
+```
 
----
+```bash
+./start-frontend.sh
+```
 
-详细开发任务与模块说明请见 [task.md](./task.md)
+### 手动启动
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+python src/main.py
+```
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 默认演示账号
+
+系统启动后会自动写入默认用户，便于毕业设计演示：
+
+- 管理员：`admin / admin123`
+- 运营经理：`manager / manager123`
+- 值班操作员：`operator / operator123`
+- 只读观察员：`viewer / viewer123`
+- 审计员：`auditor / auditor123`
+
+## 毕设说明
+
+建议答辩时将本项目表述为“面向农业灌溉场景的智能决策与安全执行原型系统”。当前重点不是直接驱动真实水泵，而是证明系统已经具备数据采集、天气风险、分区建模、计划生成、人工审批、执行记录、告警审计和可视化运营的完整软件链路。
+
+关键文档：
+
+- [系统架构说明](./docs/architecture.md)
+- [答辩演示脚本](./docs/demo_script.md)
+- [开发任务清单](./docs/task.md)
+- [Docker 部署说明](./docs/docker_guide.md)
+- [天气模块说明](./docs/README_weather.md)
+
+## 质量检查
+
+前端当前可执行：
+
+```bash
+cd frontend
+npm run typecheck
+npm run lint
+npm run build
+```
+
+后端历史测试位于 `tests/`。由于系统从早期 CLI / Gradio / 单模块结构演进为 FastAPI + Next.js + 服务层架构，旧测试中存在导入路径、依赖和启动方式不匹配的问题，后续应按当前业务主链路重建测试用例。

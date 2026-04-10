@@ -229,6 +229,32 @@ class Zone(Base, BaseModel):
         }
 
 
+class SystemSettings(Base, BaseModel):
+    """全局业务配置，作为运行期策略默认值的单一事实源。"""
+
+    singleton_key = Column(String(32), unique=True, nullable=False, default="default", index=True)
+    default_soil_moisture_threshold = Column(Float, default=40.0)
+    default_duration_minutes = Column(Integer, default=30)
+    alarm_threshold = Column(Float, default=25.0)
+    alarm_enabled = Column(Boolean, default=True)
+    collection_interval_minutes = Column(Integer, default=5)
+    knowledge_top_k = Column(Integer, default=4)
+    knowledge_chunk_size = Column(Integer, default=1200)
+    knowledge_chunk_overlap = Column(Integer, default=180)
+
+    def to_dict(self):
+        return {
+            "default_soil_moisture_threshold": self.default_soil_moisture_threshold,
+            "default_duration_minutes": self.default_duration_minutes,
+            "alarm_threshold": self.alarm_threshold,
+            "alarm_enabled": self.alarm_enabled,
+            "collection_interval_minutes": self.collection_interval_minutes,
+            "knowledge_top_k": self.knowledge_top_k,
+            "knowledge_chunk_size": self.knowledge_chunk_size,
+            "knowledge_chunk_overlap": self.knowledge_chunk_overlap,
+        }
+
+
 class Actuator(Base, BaseModel):
     """分区执行器"""
 

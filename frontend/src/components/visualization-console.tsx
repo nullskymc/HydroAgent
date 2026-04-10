@@ -19,12 +19,33 @@ type MlPredictionView = {
   points: MlForecastPoint[]
 }
 
+type DecisionModelView = {
+  action: string
+  duration: number | null
+  confidence: number | null
+  sampleCount: number | null
+  planLabel: string
+  topFactors: string[]
+}
+
 type KpiItem = {
   label: string
   value: string
   detail: string
   icon: typeof Activity
   tone: 'ok' | 'warn' | 'danger' | 'muted'
+}
+
+function isPendingPlan(plan: IrrigationPlan) {
+  return plan.status === 'pending_approval'
+}
+
+function isApprovedPlan(plan: IrrigationPlan) {
+  return plan.status === 'approved'
+}
+
+function isExecutedPlan(plan: IrrigationPlan) {
+  return plan.status === 'executing' || plan.status === 'completed'
 }
 
 function toNumber(value: unknown): number | null {
@@ -62,9 +83,9 @@ function buildFallbackOverview(dashboard: DashboardData): AnalyticsOverview {
     range: '7d',
     kpis: {
       zone_count: zones.length,
-      pending_plan_count: dashboard.plans.filter((plan) => plan.approval_status === 'pending').length,
+      pending_plan_count: dashboard.plans.filter((plan) => isPendingPlan(plan)).length,
       active_alert_count: zoneHealth.reduce((total, item) => total + item.alert_count, 0),
-      executed_plan_count: dashboard.plans.filter((plan) => plan.execution_status === 'executed').length,
+      executed_plan_count: dashboard.plans.filter((plan) => isExecutedPlan(plan)).length,
     },
     soil_trend: {
       zone_id: 'visualization',
@@ -78,10 +99,10 @@ function buildFallbackOverview(dashboard: DashboardData): AnalyticsOverview {
       range: '7d',
       items: [
         { stage: 'generated', count: dashboard.plans.length },
-        { stage: 'pending', count: dashboard.plans.filter((plan) => plan.approval_status === 'pending').length },
-        { stage: 'approved', count: dashboard.plans.filter((plan) => plan.approval_status === 'approved').length },
-        { stage: 'executed', count: dashboard.plans.filter((plan) => plan.execution_status === 'executed').length },
-        { stage: 'completed_or_rejected', count: dashboard.plans.filter((plan) => ['executed', 'rejected'].includes(plan.status)).length },
+        { stage: 'pending', count: dashboard.plans.filter((plan) => isPendingPlan(plan)).length },
+        { stage: 'approved', count: dashboard.plans.filter((plan) => isApprovedPlan(plan)).length },
+        { stage: 'executed', count: dashboard.plans.filter((plan) => isExecutedPlan(plan)).length },
+        { stage: 'completed_or_rejected', count: dashboard.plans.filter((plan) => ['completed', 'rejected', 'superseded', 'cancelled'].includes(plan.status)).length },
       ],
     },
     alert_trend: {
@@ -145,6 +166,30 @@ function readMlPrediction(plan: IrrigationPlan): MlPredictionView | null {
   }
 }
 
+function readDecisionModel(plan: IrrigationPlan): DecisionModelView | null {
+  const evidence = readRecord(plan.evidence_summary)
+  const rawModel = readRecord(evidence?.decision_model)
+  if (!rawModel) return null
+
+  const actionValue = rawModel.recommended_action
+  const action = typeof actionValue === 'string' && actionValue.trim() ? actionValue : '待校准'
+  const duration = toNumber(rawModel.recommended_duration_minutes)
+  const confidence = toNumber(rawModel.confidence)
+  const sampleCount = toNumber(rawModel.sample_count)
+  const topFactors = Array.isArray(rawModel.top_factors)
+    ? rawModel.top_factors.map((item) => String(item)).filter(Boolean).slice(0, 3)
+    : []
+
+  return {
+    action,
+    duration,
+    confidence,
+    sampleCount,
+    planLabel: plan.zone_name || plan.zone_id || plan.plan_id,
+    topFactors,
+  }
+}
+
 function findLatestMlPrediction(plans: IrrigationPlan[]): MlPredictionView | null {
   const sortedPlans = [...plans].sort((left, right) => {
     const leftTime = new Date(left.created_at || '').getTime() || 0
@@ -154,6 +199,19 @@ function findLatestMlPrediction(plans: IrrigationPlan[]): MlPredictionView | nul
   for (const plan of sortedPlans) {
     const prediction = readMlPrediction(plan)
     if (prediction) return prediction
+  }
+  return null
+}
+
+function findLatestDecisionModel(plans: IrrigationPlan[]): DecisionModelView | null {
+  const sortedPlans = [...plans].sort((left, right) => {
+    const leftTime = new Date(left.created_at || '').getTime() || 0
+    const rightTime = new Date(right.created_at || '').getTime() || 0
+    return rightTime - leftTime
+  })
+  for (const plan of sortedPlans) {
+    const decisionModel = readDecisionModel(plan)
+    if (decisionModel) return decisionModel
   }
   return null
 }
@@ -223,7 +281,9 @@ export function VisualizationConsole({
   history: HistoryData
 }) {
   const dataOverview = overview || buildFallbackOverview(dashboard)
-  const mlPrediction = findLatestMlPrediction([...history.plans, ...dashboard.plans])
+  const planPool = [...history.plans, ...dashboard.plans]
+  const mlPrediction = findLatestMlPrediction(planPool)
+  const decisionModel = findLatestDecisionModel(planPool)
   const kpis = buildKpis(dashboard, dataOverview, history)
   const lastUpdated = formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp)
 
@@ -391,6 +451,42 @@ export function VisualizationConsole({
               <p>暂无 ml_prediction，当前以运营数据为准。</p>
             </div>
           )}
+          <div className="visualization-decision">
+            <div className="visualization-panel-heading">
+              <span>Decision</span>
+              <strong>决策模型建议</strong>
+            </div>
+            {decisionModel ? (
+              <>
+                <div className="visualization-ml-strip visualization-decision-strip">
+                  <div>
+                    <span>动作</span>
+                    <strong>{decisionModel.action}</strong>
+                  </div>
+                  <div>
+                    <span>时长</span>
+                    <strong>{formatNumber(decisionModel.duration, ' 分钟')}</strong>
+                  </div>
+                  <div>
+                    <span>置信度</span>
+                    <strong>{formatNumber(decisionModel.confidence)}</strong>
+                  </div>
+                  <div>
+                    <span>样本</span>
+                    <strong>{formatNumber(decisionModel.sampleCount)}</strong>
+                  </div>
+                </div>
+                <p className="visualization-note">{decisionModel.planLabel}</p>
+                <div className="visualization-factor-list">
+                  {(decisionModel.topFactors.length ? decisionModel.topFactors : ['等待关键因子']).map((factor) => (
+                    <span key={factor}>{factor}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="visualization-note">暂无 decision_model，等待历史计划样本。</p>
+            )}
+          </div>
         </div>
 
         <div className="visualization-panel">

@@ -13,8 +13,7 @@ knowledge_base:
 
 # API配置
 apis:
-  weather_api_key: "your-amap-api-key"  # 替换为您申请的高德地图API密钥
-  weather_service_url: "https://restapi.amap.com/v3/weather/weatherInfo"  # 高德地图天气API地址
+  weather_service_url: "https://api.open-meteo.com/v1/forecast"  # Open-Meteo 预报接口（免费且免 key）
 
 # 数据库配置
 # database:

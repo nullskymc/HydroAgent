@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 try:
     from sqlalchemy import create_engine
@@ -10,6 +10,7 @@ try:
     from src.services.alert_service import acknowledge_alert, evaluate_alerts, resolve_alert
     from src.services.auth_service import ensure_auth_seed, record_audit_event
     from src.services.irrigation_service import bootstrap_default_zones
+    from src.services.irrigation_service import _sensor_summary_cache, _weather_summary_cache
 
     DEPS_AVAILABLE = True
 except ModuleNotFoundError:
@@ -34,6 +35,8 @@ class TestAdminObservability(unittest.TestCase):
 
     def setUp(self):
         self.db = self.SessionLocal()
+        _sensor_summary_cache.clear()
+        _weather_summary_cache.clear()
         bootstrap_default_zones(self.db)
         ensure_auth_seed(self.db)
 
@@ -42,8 +45,13 @@ class TestAdminObservability(unittest.TestCase):
 
     def test_alert_generation_acknowledge_and_resolve(self):
         with patch("src.services.irrigation_service.DataCollectionModule.get_data", return_value={"data": {"soil_moisture": 8, "temperature": 22, "light_intensity": 180, "rainfall": 0}}), patch(
-            "src.services.irrigation_service.requests.get",
-            return_value=Mock(json=lambda: {"status": "1", "forecasts": [{"casts": [{"date": "2026-04-03", "dayweather": "晴", "daytemp": "28", "nighttemp": "18"}]}]}),
+            "src.services.irrigation_service.DataProcessingModule.get_weather_by_city_name",
+            return_value={
+                "city": "北京",
+                "forecast": [
+                    {"date": "2026-04-03", "dayweather": "晴", "daytemp": "28", "nighttemp": "18"}
+                ],
+            },
         ):
             evaluate_alerts(self.db)
 

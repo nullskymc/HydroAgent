@@ -17,7 +17,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.config import config
-from src.database.models import KnowledgeChunk, KnowledgeDocument
+from src.database.models import KnowledgeChunk, KnowledgeDocument, SessionLocal
+from src.services.system_settings_service import get_knowledge_settings
 
 
 class KnowledgeBaseError(RuntimeError):
@@ -108,10 +109,11 @@ class KnowledgeBaseService:
         if existing:
             return {"created": False, "document": existing.to_dict()}
 
+        _, chunk_size, chunk_overlap = get_knowledge_settings(db)
         chunks = self._chunk_text(
             normalized_content,
-            chunk_size=config.KNOWLEDGE_CHUNK_SIZE,
-            chunk_overlap=config.KNOWLEDGE_CHUNK_OVERLAP,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
         embeddings = self._embed_texts(chunks)
         collection = self._get_collection()
@@ -196,7 +198,8 @@ class KnowledgeBaseService:
             raise KnowledgeBaseError("检索语句不能为空。")
 
         collection = self._get_collection()
-        requested_limit = max(1, min(limit or config.KNOWLEDGE_TOP_K, 10))
+        top_k, _, _ = self._load_knowledge_settings()
+        requested_limit = max(1, min(limit or top_k, 10))
         if collection.count() == 0:
             return {"query": normalized_query, "results": []}
 
@@ -297,6 +300,14 @@ class KnowledgeBaseService:
 
     def _normalize_content(self, content: str) -> str:
         return (content or "").replace("\r\n", "\n").strip()
+
+    def _load_knowledge_settings(self) -> tuple[int, int, int]:
+        """知识库查询路径没有显式 db，会话按需创建以读取全局业务配置。"""
+        db = SessionLocal()
+        try:
+            return get_knowledge_settings(db)
+        finally:
+            db.close()
 
     def _build_pagination(self, *, total: int, page: int, page_size: int) -> dict[str, Any]:
         total_pages = max(1, math.ceil(total / page_size)) if total else 1

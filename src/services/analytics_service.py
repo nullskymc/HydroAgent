@@ -13,6 +13,18 @@ from src.services.alert_service import list_alert_events
 from src.services.irrigation_service import get_zone_status, list_plans, list_zones
 
 
+def _is_executed_plan(plan: IrrigationPlan) -> bool:
+    return str(plan.status or "") in {"executing", "completed"} or str(plan.execution_status or "") in {"running", "stopped", "executed"}
+
+
+def _is_pending_plan(plan: IrrigationPlan) -> bool:
+    return str(plan.status or "") == "pending_approval"
+
+
+def _is_approved_plan(plan: IrrigationPlan) -> bool:
+    return str(plan.status or "") == "approved"
+
+
 def _resolve_window(range_key: str) -> tuple[dt.datetime, str]:
     now = dt.datetime.utcnow()
     if range_key == "24h":
@@ -71,10 +83,10 @@ def get_plan_funnel(db: Session, range_key: str = "7d") -> dict:
         "range": range_key,
         "items": [
             {"stage": "generated", "count": len(plans)},
-            {"stage": "pending", "count": sum(1 for plan in plans if plan.approval_status == "pending")},
-            {"stage": "approved", "count": sum(1 for plan in plans if plan.approval_status == "approved")},
-            {"stage": "executed", "count": sum(1 for plan in plans if plan.execution_status == "executed")},
-            {"stage": "completed_or_rejected", "count": sum(1 for plan in plans if plan.status in {"executed", "rejected"})},
+            {"stage": "pending", "count": sum(1 for plan in plans if _is_pending_plan(plan))},
+            {"stage": "approved", "count": sum(1 for plan in plans if _is_approved_plan(plan))},
+            {"stage": "executed", "count": sum(1 for plan in plans if _is_executed_plan(plan))},
+            {"stage": "completed_or_rejected", "count": sum(1 for plan in plans if plan.status in {"completed", "rejected", "superseded", "cancelled"})},
         ],
     }
 
@@ -133,9 +145,9 @@ def get_analytics_overview(db: Session, range_key: str = "7d") -> dict:
         "range": range_key,
         "kpis": {
             "zone_count": len(zones),
-            "pending_plan_count": sum(1 for plan in plans if plan.approval_status == "pending"),
+            "pending_plan_count": sum(1 for plan in plans if _is_pending_plan(plan)),
             "active_alert_count": sum(1 for alert in pending_alerts if alert.status in {"open", "acknowledged"}),
-            "executed_plan_count": sum(1 for plan in plans if plan.execution_status == "executed"),
+            "executed_plan_count": sum(1 for plan in plans if _is_executed_plan(plan)),
         },
         "soil_trend": soil_trend,
         "plan_funnel": funnel,

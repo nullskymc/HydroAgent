@@ -19,7 +19,7 @@ export function OperationsConsole({
 }) {
   const [pendingPlans, setPendingPlans] = useState(plans)
   const actionablePlans = useMemo(
-    () => pendingPlans.filter((plan) => ['pending', 'approved'].includes(plan.approval_status)),
+    () => pendingPlans.filter((plan) => ['pending_approval', 'approved'].includes(plan.status)),
     [pendingPlans],
   )
 
@@ -48,7 +48,7 @@ export function OperationsConsole({
               <div>
                 <strong>{plan.zone_name || plan.zone_id}</strong>
                 <p>{plan.reasoning_summary}</p>
-                <span>{plan.approval_status} / {plan.execution_status}</span>
+                <span>{plan.status} / {plan.execution_status}</span>
               </div>
               <div className="admin-action-row">
                 {currentUser.permissions.includes('plans:approve') ? (

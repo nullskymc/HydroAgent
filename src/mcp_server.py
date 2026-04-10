@@ -19,8 +19,9 @@ from src.database.models import SessionLocal
 from src.services import (
     approve_plan,
     bootstrap_default_zones,
-    create_plan,
     execute_plan,
+    generate_plan_result,
+    list_farm_context as build_farm_context,
     get_plan_by_id,
     get_zone_by_id,
     get_zone_status,
@@ -81,6 +82,16 @@ def list_farm_zones() -> str:
 
 
 @mcp.tool()
+def list_farm_context() -> str:
+    """List farm-wide lightweight context for enabled zones."""
+
+    def _callback(db):
+        return json.dumps({"zones": build_farm_context(db)}, ensure_ascii=False, indent=2)
+
+    return _with_db(_callback)
+
+
+@mcp.tool()
 def query_sensor_data(zone_id: str, sensor_id: str = "primary") -> str:
     """Query the latest sensor readings for a zone."""
 
@@ -136,18 +147,19 @@ def get_zone_operating_status(zone_id: str) -> str:
 
 
 @mcp.tool()
-def create_irrigation_plan(zone_id: str, conversation_id: str = "", trigger: str = "chat") -> str:
+def create_irrigation_plan(zone_id: str, conversation_id: str = "", trigger: str = "chat", replace: bool = False) -> str:
     """Create a structured irrigation plan for a zone."""
 
     def _callback(db):
-        plan = create_plan(
+        result = generate_plan_result(
             db,
             zone_id,
             conversation_id=conversation_id or None,
             trigger=trigger,
             requested_by="agent",
+            replace=replace,
         )
-        return json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+        return json.dumps(result, ensure_ascii=False, indent=2)
 
     return _with_db(_callback)
 

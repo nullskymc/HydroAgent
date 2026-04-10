@@ -1,0 +1,304 @@
+- generic [active] [ref=e1]:
+  - button "Open Next.js Dev Tools" [ref=e21] [cursor=pointer]:
+    - img [ref=e22]
+  - alert [ref=e25]
+  - generic [ref=e26]:
+    - banner [ref=e27]:
+      - generic [ref=e28]:
+        - link "H HydroAgent 水利灌溉智能体系统" [ref=e29] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e30]: H
+          - generic [ref=e31]:
+            - paragraph [ref=e32]: HydroAgent
+            - heading "水利灌溉智能体系统" [level=1] [ref=e33]
+        - navigation [ref=e34]:
+          - link "运营总览" [ref=e35] [cursor=pointer]:
+            - /url: /
+            - generic [ref=e36]:
+              - img [ref=e37]
+              - generic [ref=e44]: 运营总览
+          - link "数据大屏" [ref=e45] [cursor=pointer]:
+            - /url: /visualization
+            - generic [ref=e46]:
+              - img [ref=e47]
+              - generic [ref=e49]: 数据大屏
+          - link "智能对话" [ref=e50] [cursor=pointer]:
+            - /url: /chat
+            - generic [ref=e51]:
+              - img [ref=e52]
+              - generic [ref=e55]: 智能对话
+          - link "运营中心" [ref=e56] [cursor=pointer]:
+            - /url: /operations
+            - generic [ref=e57]:
+              - img [ref=e58]
+              - generic [ref=e60]: 运营中心
+          - link "资产中心" [ref=e61] [cursor=pointer]:
+            - /url: /assets
+            - generic [ref=e62]:
+              - img [ref=e63]
+              - generic [ref=e73]: 资产中心
+          - link "知识库" [ref=e74] [cursor=pointer]:
+            - /url: /knowledge
+            - generic [ref=e75]:
+              - img [ref=e76]
+              - generic [ref=e78]: 知识库
+          - link "告警中心" [ref=e79] [cursor=pointer]:
+            - /url: /alerts
+            - generic [ref=e80]:
+              - img [ref=e81]
+              - generic [ref=e84]: 告警中心
+          - link "用户与角色" [ref=e85] [cursor=pointer]:
+            - /url: /users
+            - generic [ref=e86]:
+              - img [ref=e87]
+              - generic [ref=e92]: 用户与角色
+          - link "报表中心" [ref=e93] [cursor=pointer]:
+            - /url: /reports
+            - generic [ref=e94]:
+              - img [ref=e95]
+              - generic [ref=e97]: 报表中心
+          - link "审计记录" [ref=e98] [cursor=pointer]:
+            - /url: /history
+            - generic [ref=e99]:
+              - img [ref=e100]
+              - generic [ref=e104]: 审计记录
+          - link "系统设置" [ref=e105] [cursor=pointer]:
+            - /url: /settings
+            - generic [ref=e106]:
+              - img [ref=e107]
+              - generic [ref=e110]: 系统设置
+        - generic [ref=e111]:
+          - generic [ref=e112]:
+            - strong [ref=e113]: 系统管理员
+            - generic [ref=e114]: admin
+          - button "退出" [ref=e115] [cursor=pointer]
+    - main [ref=e116]:
+      - generic [ref=e117]:
+        - generic [ref=e118]: Smart Irrigation / Operation Center
+        - generic [ref=e119]: 实时运行中枢
+      - generic [ref=e120]:
+        - generic [ref=e121]:
+          - generic [ref=e122]:
+            - paragraph [ref=e123]: 运行总览
+            - heading "灌溉中枢" [level=2] [ref=e124]
+          - generic [ref=e125]:
+            - generic [ref=e126]:
+              - generic [ref=e127]: 运行总览
+              - strong [ref=e128]: Core Online
+            - generic [ref=e130]:
+              - generic [ref=e131]: 模式
+              - strong [ref=e132]: 待命
+            - generic [ref=e133]:
+              - generic [ref=e134]: 平均湿度
+              - strong [ref=e135]: 64.09%
+            - generic [ref=e136]:
+              - generic [ref=e137]: 待审批
+              - strong [ref=e138]: "0"
+            - generic [ref=e139]:
+              - generic [ref=e140]: 注意分区
+              - strong [ref=e141]: "0"
+            - generic [ref=e142]:
+              - generic [ref=e143]: 天气
+              - strong [ref=e144]: 小雨 (0.91mm)
+          - generic [ref=e145]:
+            - generic [ref=e146]: 城市 北京
+            - strong [ref=e147]: 更新时间 04/09 18:33
+        - generic [ref=e148]:
+          - generic [ref=e149]:
+            - generic [ref=e150]:
+              - generic [ref=e151]:
+                - generic [ref=e152]:
+                  - paragraph [ref=e153]: 控制
+                  - heading "执行状态" [level=2] [ref=e154]
+                - generic [ref=e155]:
+                  - generic [ref=e156]: 告警 启用
+                  - generic [ref=e157]: 默认 30 分钟
+              - generic [ref=e158]:
+                - generic [ref=e159]:
+                  - generic [ref=e160]:
+                    - generic [ref=e161]:
+                      - generic [ref=e162]: 模式
+                      - strong [ref=e163]: 待命
+                    - generic [ref=e164]:
+                      - generic [ref=e165]: 执行状态
+                      - strong [ref=e166]: stopped
+                    - generic [ref=e167]:
+                      - generic [ref=e168]: 剩余时长
+                      - strong [ref=e169]: "--"
+                  - generic [ref=e170]:
+                    - generic [ref=e171]: 策略边界
+                    - strong [ref=e172]: start 必须基于计划
+                    - paragraph [ref=e173]: 系统在线时，启动命令仍需遵循计划与审批边界。
+                - generic [ref=e174]:
+                  - generic [ref=e175]:
+                    - button "启动灌溉" [ref=e176] [cursor=pointer]
+                    - button "停止灌溉" [disabled] [ref=e177]
+                  - paragraph [ref=e178]: 手动控制不会绕过计划与审批约束。
+            - generic [ref=e179]:
+              - generic [ref=e180]:
+                - generic [ref=e181]:
+                  - paragraph [ref=e182]: 分区
+                  - heading "分区状态" [level=2] [ref=e183]
+                - generic [ref=e185]: 2 个分区
+              - generic [ref=e186]:
+                - generic [ref=e187]:
+                  - generic [ref=e188]: 分区名称
+                  - generic [ref=e189]: 湿度
+                  - generic [ref=e190]: 阈值
+                  - generic [ref=e191]: 缺口
+                  - generic [ref=e192]: 执行器
+                - generic [ref=e193]:
+                  - generic [ref=e194]:
+                    - strong [ref=e195]: 分区 1
+                    - paragraph [ref=e196]: 北京
+                    - emphasis [ref=e197]: 计划 not_required
+                  - generic [ref=e198]: 68.67%
+                  - generic [ref=e199]: 30%
+                  - generic [ref=e200]: 0%
+                  - generic [ref=e201]:
+                    - generic [ref=e202]: idle
+                    - paragraph [ref=e203]: 分区 1 阀门
+                - generic [ref=e204]:
+                  - generic [ref=e205]:
+                    - strong [ref=e206]: 分区 2
+                    - paragraph [ref=e207]: 北京
+                    - emphasis [ref=e208]: 计划 not_required
+                  - generic [ref=e209]: 59.5%
+                  - generic [ref=e210]: 30%
+                  - generic [ref=e211]: 0%
+                  - generic [ref=e212]:
+                    - generic [ref=e213]: idle
+                    - paragraph [ref=e214]: 分区 2 阀门
+            - generic [ref=e216]:
+              - generic [ref=e217]:
+                - generic [ref=e219]:
+                  - paragraph [ref=e220]: 天气
+                  - heading "天气窗口" [level=2] [ref=e221]
+                - generic [ref=e222]:
+                  - generic [ref=e223]:
+                    - generic [ref=e224]:
+                      - strong [ref=e225]: 2026-04-09
+                      - paragraph [ref=e226]: 小雨
+                    - generic [ref=e227]: 12.1° / 10.4°
+                  - generic [ref=e228]:
+                    - generic [ref=e229]:
+                      - strong [ref=e230]: 2026-04-10
+                      - paragraph [ref=e231]: 雾
+                    - generic [ref=e232]: 26.7° / 8°
+                  - generic [ref=e233]:
+                    - generic [ref=e234]:
+                      - strong [ref=e235]: 2026-04-11
+                      - paragraph [ref=e236]: 晴
+                    - generic [ref=e237]: 25.8° / 11.9°
+                  - generic [ref=e238]:
+                    - generic [ref=e239]:
+                      - strong [ref=e240]: 2026-04-12
+                      - paragraph [ref=e241]: 阴
+                    - generic [ref=e242]: 23.2° / 13.1°
+              - generic [ref=e243]:
+                - generic [ref=e245]:
+                  - paragraph [ref=e246]: 系统
+                  - heading "系统状态" [level=2] [ref=e247]
+                - generic [ref=e248]:
+                  - generic [ref=e249]:
+                    - generic [ref=e250]: 核心状态
+                    - strong [ref=e251]: 已连通
+                  - generic [ref=e252]:
+                    - generic [ref=e253]: 采集周期
+                    - strong [ref=e254]: 60 分钟
+                  - generic [ref=e255]:
+                    - generic [ref=e256]: 节点数量
+                    - strong [ref=e257]: "2"
+                  - generic [ref=e258]:
+                    - generic [ref=e259]: 当前模型
+                    - strong [ref=e260]: gpt-4o-mini
+            - generic [ref=e261]:
+              - generic [ref=e262]:
+                - generic [ref=e263]:
+                  - paragraph [ref=e264]: 分析
+                  - heading "运营图表" [level=2] [ref=e265]
+                - generic [ref=e267]: 7 天窗口
+              - generic [ref=e268]:
+                - heading "湿度趋势" [level=3] [ref=e271]
+                - heading "计划漏斗" [level=3] [ref=e278]
+                - heading "告警趋势" [level=3] [ref=e285]
+                - heading "分区健康热力图" [level=3] [ref=e292]
+          - complementary [ref=e297]:
+            - generic [ref=e298]:
+              - generic [ref=e299]:
+                - generic [ref=e300]:
+                  - paragraph [ref=e301]: 智能体
+                  - heading "快速发起对话" [level=2] [ref=e302]
+                - img [ref=e303]
+              - generic [ref=e306]:
+                - textbox "例如：分析当前分区湿度并给出是否需要生成灌溉计划的建议" [ref=e307]
+                - generic [ref=e308]:
+                  - button "发送并进入对话" [ref=e309] [cursor=pointer]:
+                    - img [ref=e310]
+                    - generic [ref=e312]: 发送并进入对话
+                  - link "只打开聊天页" [ref=e313] [cursor=pointer]:
+                    - /url: /chat
+                - paragraph [ref=e314]: 提交后会自动进入智能对话页，并以新会话发起本轮咨询。
+            - generic [ref=e315]:
+              - generic [ref=e316]:
+                - generic [ref=e317]:
+                  - paragraph [ref=e318]: 审批
+                  - heading "待处理计划" [level=2] [ref=e319]
+                - generic [ref=e321]: 高优待办
+              - generic [ref=e323]:
+                - strong [ref=e326]: 当前没有待审批计划
+                - paragraph [ref=e327]: 计划队列为空，审批侧栏保持清空状态。
+            - generic [ref=e328]:
+              - generic [ref=e330]:
+                - paragraph [ref=e331]: 审计
+                - heading "最近决策" [level=2] [ref=e332]
+              - generic [ref=e333]:
+                - generic [ref=e334]:
+                  - generic [ref=e335]:
+                    - strong [ref=e336]: Agent generated a structured irrigation plan after collecting evidence.
+                    - paragraph [ref=e337]: 分区 2 当前平均土壤湿度 63.00%，阈值 30.00%。 当前建议暂缓灌溉。 ML 预测 24 小时湿度 46.62%，已纳入推荐时长计算。 决策模型建议 hold，建议时长 0 分钟，置信度 1.00。 天气预报提示近期可能降雨。 风险因素：未来 48 小时存在降雨信号、决策模型建议 hold。
+                  - generic [ref=e338]: 04/09 18:21
+                - generic [ref=e339]:
+                  - generic [ref=e340]:
+                    - strong [ref=e341]: 分区 2 当前平均土壤湿度 63.00%，阈值 30.00%。 当前建议暂缓灌溉。 ML 预测 24 小时湿度 46.62%，已纳入推荐时长计算。 决策模型建议 hold，建议时长 0 分钟，置信度 1.00。 天气预报提示近期可能降雨。 风险因素：未来 48 小时存在降雨信号、决策模型建议 hold。
+                    - paragraph [ref=e342]: Plan generated by service layer.
+                  - generic [ref=e343]: 04/09 18:21
+                - generic [ref=e344]:
+                  - generic [ref=e345]:
+                    - strong [ref=e346]: 分区 2 当前平均土壤湿度 48.45%，阈值 30.00%。 当前建议暂缓灌溉。 ML 预测 24 小时湿度 44.81%，已纳入推荐时长计算。 决策模型建议 hold，建议时长 0 分钟，置信度 1.00。 天气预报提示近期可能降雨。 风险因素：未来 48 小时存在降雨信号、决策模型建议 hold。
+                    - paragraph [ref=e347]: Plan generated by service layer.
+                  - generic [ref=e348]: 04/09 15:24
+                - generic [ref=e349]:
+                  - generic [ref=e350]:
+                    - strong [ref=e351]: 分区 1 当前平均土壤湿度 46.28%，阈值 30.00%。 当前建议暂缓灌溉。 ML 预测 24 小时湿度 44.18%，已纳入推荐时长计算。 决策模型建议 hold，建议时长 0 分钟，置信度 1.00。 天气预报提示近期可能降雨。 风险因素：未来 48 小时存在降雨信号、决策模型建议 hold。
+                    - paragraph [ref=e352]: Plan generated by service layer.
+                  - generic [ref=e353]: 04/09 15:24
+                - generic [ref=e354]:
+                  - generic [ref=e355]:
+                    - strong [ref=e356]: 分区 2 当前平均土壤湿度 60.44%，阈值 30.00%。 当前建议暂缓灌溉。 ML 预测 24 小时湿度 43.48%，已纳入推荐时长计算。 决策模型建议 hold，建议时长 0 分钟，置信度 1.00。 天气预报提示近期可能降雨。 风险因素：未来 48 小时存在降雨信号、决策模型建议 hold。
+                    - paragraph [ref=e357]: Plan generated by service layer.
+                  - generic [ref=e358]: 04/09 14:24
+            - generic [ref=e359]:
+              - generic [ref=e361]:
+                - paragraph [ref=e362]: 系统
+                - heading "系统信息" [level=2] [ref=e363]
+              - generic [ref=e364]:
+                - generic [ref=e365]:
+                  - generic [ref=e366]: 系统模型
+                  - strong [ref=e367]: gpt-4o-mini
+                - generic [ref=e368]:
+                  - generic [ref=e369]: 节点数量
+                  - strong [ref=e370]: "2"
+                - generic [ref=e371]:
+                  - generic [ref=e372]: 告警阈值
+                  - strong [ref=e373]: "25"
+                - generic [ref=e374]:
+                  - generic [ref=e375]: 默认阈值
+                  - strong [ref=e376]: 30%
+              - generic [ref=e377]:
+                - generic [ref=e378]: DeepAgents
+                - generic [ref=e379]: Zone Plans
+                - generic [ref=e380]: Approval Workflow
+                - generic [ref=e381]: Streaming SSE
+                - generic [ref=e382]: Decision Audit
+                - generic [ref=e383]: Knowledge Base

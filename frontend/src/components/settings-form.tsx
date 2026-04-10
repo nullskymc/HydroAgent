@@ -1,21 +1,14 @@
 'use client'
 
-import { ReactNode, useMemo, useState, useTransition } from 'react'
+import { ReactNode, useEffect, useMemo, useState, useTransition } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { RuntimeSettings } from '@/lib/types'
+import { RuntimeSettings, SkillCatalogItem } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { ModelPickerDrawer } from '@/components/model-picker-drawer'
-
-function parseSensorIds(value: string) {
-  // 设置页按“每行一个传感器”编辑，再统一转换成后端需要的数组结构。
-  return value
-    .split('\n')
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
+import { Badge } from '@/components/ui/badge'
 
 function formatConfigSourceLabel(value?: string) {
   if (!value) {
@@ -109,12 +102,19 @@ const navItems = [
   { id: 'irrigation', label: '灌溉策略' },
   { id: 'alarm', label: '报警策略' },
   { id: 'context', label: '运行上下文' },
+  { id: 'skills', label: 'Skills' },
 ] as const
 
 type SettingsSectionId = (typeof navItems)[number]['id']
 
 function resolveSection(value: string | null | undefined, fallback: SettingsSectionId) {
   return navItems.some((item) => item.id === value) ? (value as SettingsSectionId) : fallback
+}
+
+function formatSkillSourceLabel(value?: string | null) {
+  if (value === 'generated') return '系统包装'
+  if (value === 'imported') return '外部导入'
+  return '项目内置'
 }
 
 export function SettingsForm({
@@ -125,11 +125,15 @@ export function SettingsForm({
   initialSection: SettingsSectionId
 }) {
   const [settings, setSettings] = useState(initialSettings)
-  const [sensorIdsText, setSensorIdsText] = useState((initialSettings.sensor_ids || []).join('\n'))
   const [openAiApiKeyInput, setOpenAiApiKeyInput] = useState('')
   const [embeddingApiKeyInput, setEmbeddingApiKeyInput] = useState('')
   const [modelDrawerTarget, setModelDrawerTarget] = useState<'chat' | 'embedding' | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [skillMessage, setSkillMessage] = useState<string | null>(null)
+  const [skills, setSkills] = useState<SkillCatalogItem[]>([])
+  const [selectedSkill, setSelectedSkill] = useState<SkillCatalogItem | null>(null)
+  const [importUrl, setImportUrl] = useState('')
+  const [importOverwrite, setImportOverwrite] = useState(false)
   const [isPending, startTransition] = useTransition()
   const searchParams = useSearchParams()
   const activeSection = resolveSection(searchParams?.get('section'), initialSection)
@@ -152,7 +156,6 @@ export function SettingsForm({
           knowledge_chunk_size: settings.knowledge_chunk_size,
           knowledge_chunk_overlap: settings.knowledge_chunk_overlap,
           collection_interval_minutes: settings.collection_interval_minutes,
-          sensor_ids: parseSensorIds(sensorIdsText),
           soil_moisture_threshold: settings.soil_moisture_threshold,
           default_duration_minutes: settings.default_duration_minutes,
           alarm_threshold: settings.alarm_threshold,
@@ -169,15 +172,14 @@ export function SettingsForm({
 
       const payload = await response.json()
       setSettings(payload.settings)
-      setSensorIdsText((payload.settings.sensor_ids || []).join('\n'))
       setOpenAiApiKeyInput('')
       setEmbeddingApiKeyInput('')
       setMessage(
         payload.agent_reload_error
-          ? `配置已保存，但 Agent 热重载失败：${payload.agent_reload_error}`
+          ? `配置已保存，但 AI 引擎热重载失败：${payload.agent_reload_error}`
           : payload.agent_reloaded
-            ? '配置已同步到 config.yaml，并已热重载 AI 引擎'
-            : '配置已同步到 config.yaml'
+            ? 'YAML 与业务配置已保存，并已热重载 AI 引擎'
+            : 'YAML 与业务配置已保存'
       )
     })
   }
@@ -187,6 +189,56 @@ export function SettingsForm({
     [activeSection],
   )
   const configSourceLabel = formatConfigSourceLabel(settings.config_source)
+
+  useEffect(() => {
+    if (activeSection !== 'skills') return
+    let cancelled = false
+
+    async function loadSkillWorkspace() {
+      try {
+        const skillsResponse = await fetch('/api/skills', { cache: 'no-store' })
+        const skillsPayload = skillsResponse.ok ? ((await skillsResponse.json()) as { skills?: SkillCatalogItem[] }) : { skills: [] }
+        if (cancelled) return
+        setSkills(skillsPayload.skills || [])
+        setSelectedSkill((current) => {
+          if (!current) return skillsPayload.skills?.[0] || null
+          return (skillsPayload.skills || []).find((item) => item.id === current.id) || null
+        })
+      } catch (error) {
+        if (!cancelled) {
+          setSkillMessage(error instanceof Error ? error.message : 'Skill 列表加载失败')
+        }
+      }
+    }
+
+    void loadSkillWorkspace()
+    return () => {
+      cancelled = true
+    }
+  }, [activeSection])
+
+  async function refreshSkillWorkspace(preferredSkillId?: string) {
+    const skillsResponse = await fetch('/api/skills', { cache: 'no-store' })
+    const skillsPayload = (await skillsResponse.json()) as { skills?: SkillCatalogItem[] }
+    const nextSkills = skillsPayload.skills || []
+    setSkills(nextSkills)
+    const nextSelected =
+      (preferredSkillId ? nextSkills.find((item) => item.id === preferredSkillId) : null) ||
+      nextSkills.find((item) => item.id === selectedSkill?.id) ||
+      nextSkills[0] ||
+      null
+    if (!nextSelected) {
+      setSelectedSkill(null)
+      return
+    }
+    const detailResponse = await fetch(`/api/skills/${nextSelected.id}`, { cache: 'no-store' })
+    if (!detailResponse.ok) {
+      setSelectedSkill(nextSelected)
+      return
+    }
+    const detailPayload = (await detailResponse.json()) as { skill: SkillCatalogItem }
+    setSelectedSkill(detailPayload.skill)
+  }
 
   function applyModelSelection(modelId: string) {
     if (modelDrawerTarget === 'chat') {
@@ -198,11 +250,63 @@ export function SettingsForm({
     setModelDrawerTarget(null)
   }
 
+  function loadSkillDetail(skillId: string) {
+    startTransition(async () => {
+      setSkillMessage(null)
+      const response = await fetch(`/api/skills/${skillId}`, { cache: 'no-store' })
+      if (!response.ok) {
+        setSkillMessage(await response.text())
+        return
+      }
+      const payload = (await response.json()) as { skill: SkillCatalogItem }
+      setSelectedSkill(payload.skill)
+    })
+  }
+
+  function submitSkillImport(urlOverride?: string, overwriteOverride?: boolean) {
+    startTransition(async () => {
+      setSkillMessage(null)
+      const response = await fetch('/api/skills/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: (urlOverride ?? importUrl).trim(),
+          overwrite: overwriteOverride ?? importOverwrite,
+        }),
+      })
+      const payload = (await response.json().catch(() => null)) as
+        | { detail?: string; import_result?: string; skill?: SkillCatalogItem }
+        | null
+      if (!response.ok) {
+        setSkillMessage(payload?.detail || 'Skill 导入失败')
+        return
+      }
+      setSkillMessage(payload?.import_result === 'updated' ? 'Skill 已覆盖更新' : 'Skill 已导入')
+      setImportOverwrite(false)
+      setImportUrl('')
+      await refreshSkillWorkspace(payload?.skill?.id)
+    })
+  }
+
+  function deleteManagedSkill(skillId: string) {
+    startTransition(async () => {
+      setSkillMessage(null)
+      const response = await fetch(`/api/skills/${skillId}`, { method: 'DELETE' })
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null
+      if (!response.ok) {
+        setSkillMessage(payload?.detail || 'Skill 删除失败')
+        return
+      }
+      setSkillMessage('Skill 已删除')
+      await refreshSkillWorkspace()
+    })
+  }
+
   function renderCurrentSection() {
     switch (activeSection) {
       case 'general':
         return (
-          <SettingsSection id="general" title="常规" description="聊天模型、推理 endpoint、采集周期和传感器列表。">
+          <SettingsSection id="general" title="常规" description="YAML 托管的聊天模型、推理 endpoint 与基础业务节奏。">
             <SettingsItem
               label="聊天模型"
               path="model_name"
@@ -255,27 +359,14 @@ export function SettingsForm({
             />
             <SettingsItem
               label="采集周期"
-              path="sensors.collection_interval_minutes"
-              detail="控制传感器数据采集的分钟间隔。"
+              path="system_settings.collection_interval_minutes"
+              detail="数据库中的全局默认采集周期，影响自动检查与采样节奏。"
               control={
                 <Input
                   type="number"
                   value={settings.collection_interval_minutes ?? ''}
                   onChange={(event) => update('collection_interval_minutes', Number(event.target.value))}
                   placeholder="例如 60"
-                />
-              }
-            />
-            <SettingsItem
-              label="传感器列表"
-              path="sensors.ids"
-              detail="每行一个传感器 ID，保存时映射成 YAML 数组。"
-              control={
-                <Textarea
-                  rows={3}
-                  value={sensorIdsText}
-                  onChange={(event) => setSensorIdsText(event.target.value)}
-                  placeholder={'sensor_001\nsensor_002'}
                 />
               }
             />
@@ -365,11 +456,11 @@ export function SettingsForm({
         )
       case 'irrigation':
         return (
-          <SettingsSection id="irrigation" title="灌溉策略" description="默认阈值与默认灌溉时长。">
+          <SettingsSection id="irrigation" title="灌溉策略" description="数据库托管的新建分区默认值，不会覆盖现有分区。">
             <SettingsItem
-              label="土壤湿度阈值 (%)"
-              path="irrigation_strategy.soil_moisture_threshold"
-              detail="低于该值时，系统更倾向于生成灌溉计划。"
+              label="新建分区默认阈值 (%)"
+              path="system_settings.default_soil_moisture_threshold"
+              detail="创建新分区时预填的土壤湿度阈值；现有分区继续使用各自数据库值。"
               control={
                 <Input
                   type="number"
@@ -379,9 +470,9 @@ export function SettingsForm({
               }
             />
             <SettingsItem
-              label="默认灌溉时长 (分钟)"
-              path="irrigation_strategy.default_duration_minutes"
-              detail="缺少补偿因子时，作为计划与手动执行的基准时长。"
+              label="新建分区默认灌溉时长 (分钟)"
+              path="system_settings.default_duration_minutes"
+              detail="创建新分区时预填的默认时长；不会批量覆盖已有分区。"
               control={
                 <Input
                   type="number"
@@ -394,11 +485,11 @@ export function SettingsForm({
         )
       case 'alarm':
         return (
-          <SettingsSection id="alarm" title="报警策略" description="报警阈值和报警开关。">
+          <SettingsSection id="alarm" title="报警策略" description="数据库托管的全局报警默认值。">
             <SettingsItem
               label="报警阈值 (%)"
-              path="alarm.soil_moisture_threshold"
-              detail="低于该值时，监控链路会提升告警等级。"
+              path="system_settings.alarm_threshold"
+              detail="低于该值时，全局告警规则会提升风险等级。"
               control={
                 <Input
                   type="number"
@@ -409,8 +500,8 @@ export function SettingsForm({
             />
             <SettingsItem
               label="启用报警"
-              path="alarm.enabled"
-              detail="控制是否主动发送低湿度报警。"
+              path="system_settings.alarm_enabled"
+              detail="控制是否启用全局低湿度报警链路。"
               control={
                 <label className="settings-switch-row">
                   <input
@@ -427,7 +518,7 @@ export function SettingsForm({
         )
       case 'context':
         return (
-          <SettingsSection id="context" title="运行上下文" description="确认当前配置生效位置与运行实例上下文。">
+          <SettingsSection id="context" title="运行上下文" description="确认 YAML 来源与当前实例的运行环境。">
             <ReadonlyItem
               label="数据库类型"
               path="database.type"
@@ -441,6 +532,113 @@ export function SettingsForm({
               detail="后端设置接口当前绑定的配置文件路径。"
             />
           </SettingsSection>
+        )
+      case 'skills':
+        return (
+          <>
+            <SettingsSection id="skills-installed" title="已安装 Skills" description="统一查看项目内置、外部导入和系统预置包装的 skill。">
+              <div className="skills-installed-grid">
+                <div className="skills-installed-list">
+                  {skills.map((skill) => (
+                    <button
+                      key={skill.id}
+                      type="button"
+                      className={cn('skills-installed-card', selectedSkill?.id === skill.id && 'is-active')}
+                      onClick={() => loadSkillDetail(skill.id)}
+                    >
+                      <div className="skills-installed-head">
+                        <strong>{skill.name}</strong>
+                        <Badge tone={skill.source_type === 'generated' ? 'warning' : skill.source_type === 'imported' ? 'success' : 'default'}>
+                          {formatSkillSourceLabel(skill.source_type)}
+                        </Badge>
+                      </div>
+                      <p>{skill.description}</p>
+                      <div className="skills-installed-meta">
+                        <span>{skill.id}</span>
+                        <span>{skill.tool_bundle?.length || skill.tool_allowlist?.length || 0} tools</span>
+                        <span>{skill.workflow_phases?.join(' / ') || 'analysis'}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="skills-detail-card">
+                  {selectedSkill ? (
+                    <>
+                      <div className="skills-detail-head">
+                        <div>
+                          <strong>{selectedSkill.name}</strong>
+                          <p>{selectedSkill.description}</p>
+                        </div>
+                        <Badge>{formatSkillSourceLabel(selectedSkill.source_type)}</Badge>
+                      </div>
+                      <div className="skills-detail-meta">
+                        <span>ID: {selectedSkill.id}</span>
+                        <span>模式: {(selectedSkill.mode_allowlist || []).join(' / ') || '--'}</span>
+                        <span>工具数: {selectedSkill.tool_bundle?.length || selectedSkill.tool_allowlist?.length || 0}</span>
+                      </div>
+                      {selectedSkill.source_url ? (
+                        <a className="settings-link" href={selectedSkill.source_url} target="_blank" rel="noreferrer">
+                          {selectedSkill.source_url}
+                        </a>
+                      ) : null}
+                      <Textarea readOnly rows={8} value={selectedSkill.instruction_append || '暂无详细指令'} />
+                      <div className="settings-inline-actions">
+                        {selectedSkill.source_type === 'imported' && selectedSkill.source_url ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={isPending}
+                            onClick={() => submitSkillImport(selectedSkill.source_url || '', true)}
+                          >
+                            重新导入
+                          </Button>
+                        ) : null}
+                        {selectedSkill.source_type === 'imported' ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={isPending}
+                            onClick={() => deleteManagedSkill(selectedSkill.id)}
+                          >
+                            删除
+                          </Button>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="settings-item-value">当前没有已安装 skill。</div>
+                  )}
+                </div>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection id="skills-import" title="导入外部 Skill" description="仅支持 GitHub Raw 与白名单域名，下载后落盘为本地 skill。">
+              <SettingsItem
+                label="Skill 链接"
+                path="skills.import.url"
+                detail="支持 raw.githubusercontent.com、gist.githubusercontent.com，以及配置的白名单域名。GitHub blob 链接会自动转换成 raw。"
+                control={
+                  <div className="settings-control-stack">
+                    <Input value={importUrl} onChange={(event) => setImportUrl(event.target.value)} placeholder="https://raw.githubusercontent.com/..." />
+                    <label className="settings-switch-row">
+                      <input
+                        className="ui-checkbox settings-switch-checkbox"
+                        type="checkbox"
+                        checked={importOverwrite}
+                        onChange={(event) => setImportOverwrite(event.target.checked)}
+                      />
+                      <span>{importOverwrite ? '允许覆盖已存在 imported/generated skill' : '默认禁止覆盖'}</span>
+                    </label>
+                    <div className="settings-inline-actions">
+                      <Button disabled={isPending || !importUrl.trim()} onClick={() => submitSkillImport()}>
+                        导入 Skill
+                      </Button>
+                    </div>
+                  </div>
+                }
+              />
+            </SettingsSection>
+          </>
         )
       default:
         return null
@@ -475,7 +673,7 @@ export function SettingsForm({
           ))}
         </nav>
         <div className="settings-sidebar-note">
-          <p>结构化映射到后端配置文件。</p>
+          <p>模型配置写 YAML，业务默认值写数据库。</p>
         </div>
       </aside>
 
@@ -484,7 +682,7 @@ export function SettingsForm({
           <div className="settings-main-copy">
             <p className="eyebrow">系统偏好</p>
             <h2>{currentSection.label}</h2>
-            <p>当前仅显示所选分类；字段继续通过结构化映射写入运行配置。</p>
+            <p>当前仅显示所选分类；模型配置写入 YAML，运行期业务默认值写入数据库。</p>
           </div>
           <span className="settings-main-source" title={settings.config_source || 'config.yaml'}>
             {configSourceLabel}
@@ -494,6 +692,8 @@ export function SettingsForm({
         <div key={activeSection} className="settings-section-stage">
           {renderCurrentSection()}
         </div>
+
+        {activeSection === 'skills' && skillMessage ? <div className="settings-status-banner"><p>{skillMessage}</p></div> : null}
 
         <div className="settings-savebar">
           <Button className="settings-save-button" disabled={isPending} onClick={submit}>

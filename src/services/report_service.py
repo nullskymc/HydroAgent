@@ -13,6 +13,10 @@ from src.services.analytics_service import get_zone_trend
 from src.services.irrigation_service import get_zone_status, list_plans, list_zones
 
 
+def _is_executed_plan(plan) -> bool:
+    return str(getattr(plan, "status", "") or "") in {"executing", "completed"} or str(getattr(plan, "execution_status", "") or "") in {"running", "stopped", "executed"}
+
+
 def _write_csv(rows: list[dict], fieldnames: list[str]) -> str:
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
@@ -24,10 +28,11 @@ def _write_csv(rows: list[dict], fieldnames: list[str]) -> str:
 
 def export_operations_report(db: Session) -> str:
     rows = []
+    plans = list_plans(db, limit=200)
     for zone in list_zones(db):
         status = get_zone_status(db, zone.zone_id)
         sensor_average = status["sensor_summary"].get("average", {})
-        latest_plan = status.get("pending_plan") or {}
+        latest_plan = status.get("pending_plan") or next((plan.to_dict() for plan in plans if plan.zone_id == zone.zone_id), {})
         alert_count = (
             db.query(AlertEvent)
             .filter(AlertEvent.zone_id == zone.zone_id, AlertEvent.status.in_(["open", "acknowledged"]))
@@ -91,7 +96,7 @@ def export_zone_report(db: Session, zone_id: str) -> str:
             "soil_moisture": moisture,
             "threshold": threshold,
             "plan_count": len(plans),
-            "executed_plan_count": sum(1 for plan in plans if plan.execution_status == "executed"),
+            "executed_plan_count": sum(1 for plan in plans if _is_executed_plan(plan)),
             "recent_alert_count": db.query(AlertEvent).filter(AlertEvent.zone_id == zone_id).count(),
         }
         for label, moisture, threshold in zip(trend["labels"], trend["soil_moisture"], trend["threshold"], strict=False)

@@ -8,7 +8,7 @@ import json
 import logging
 import uuid
 from urllib.parse import urlsplit
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -21,13 +21,19 @@ from src.database.models import (
     SessionLocal,
     User,
 )
+from src.llm.agent_runtime import DEFAULT_AGENT_MODE, normalize_mode
 from src.llm.persistence import get_hydro_persistence
+from src.llm.skill_runtime import get_skill_runtime
 from src.services import (
     approve_plan,
-    create_plan,
+    ensure_system_settings,
     execute_plan,
+    generate_plan_result,
     get_plan_by_id,
+    get_open_plan_for_zone,
+    get_system_settings_snapshot,
     get_zone_status,
+    list_farm_context,
     list_plans,
     list_zones,
     manual_override_control,
@@ -35,10 +41,84 @@ from src.services import (
     reject_plan,
     require_permission,
     summarize_system_irrigation,
+    update_system_settings,
 )
 
 logger = logging.getLogger("hydroagent.api")
 router = APIRouter()
+
+INQUIRY_KEYWORDS = (
+    "是否",
+    "能否",
+    "可否",
+    "可以",
+    "能不能",
+    "查看",
+    "检查",
+    "看看",
+    "说明",
+    "解释",
+    "为什么",
+    "原因",
+    "风险",
+    "status",
+    "why",
+    "explain",
+    "review",
+)
+
+OPERATOR_KEYWORDS = (
+    "批准",
+    "通过",
+    "同意",
+    "拒绝",
+    "驳回",
+    "执行",
+    "启动",
+    "开始灌溉",
+    "停止",
+    "关闭",
+    "approve",
+    "reject",
+    "execute",
+    "start irrigation",
+    "stop irrigation",
+)
+
+AUDIT_KEYWORDS = (
+    "审计",
+    "复盘",
+    "回放",
+    "trace",
+    "日志",
+    "记录",
+    "历史",
+    "链路",
+    "决策来源",
+    "为什么",
+    "原因",
+)
+
+PLANNING_KEYWORDS = (
+    "计划",
+    "生成",
+    "建议",
+    "灌溉",
+    "浇水",
+    "湿度",
+    "soil moisture",
+    "预测",
+    "待审批",
+    "待执行",
+    "plan",
+    "recommend",
+    "forecast",
+)
+
+PLAN_REFERENCE_KEYWORDS = ("这个计划", "该计划", "它", "this plan", "current plan")
+APPROVE_KEYWORDS = ("批准", "通过", "同意", "approve")
+REJECT_KEYWORDS = ("拒绝", "驳回", "reject")
+EXECUTE_KEYWORDS = ("执行", "启动", "开始灌溉", "execute", "start irrigation")
 
 
 def _redact_sensitive_settings(updates: dict) -> dict:
@@ -56,9 +136,25 @@ def _should_reload_agent(updates: dict) -> bool:
         "openai_api_key",
         "embedding_model_name",
         "embedding_api_key",
-        "knowledge_top_k",
     }
     return any(key in updates for key in reload_keys)
+
+
+def _build_settings_response(*, yaml_settings: dict, business_settings: dict) -> dict:
+    """兼容旧字段，同时暴露新的 source-aware 结构。"""
+    return {
+        **yaml_settings,
+        "soil_moisture_threshold": business_settings.get("default_soil_moisture_threshold"),
+        "default_duration_minutes": business_settings.get("default_duration_minutes"),
+        "alarm_threshold": business_settings.get("alarm_threshold"),
+        "alarm_enabled": business_settings.get("alarm_enabled"),
+        "collection_interval_minutes": business_settings.get("collection_interval_minutes"),
+        "knowledge_top_k": business_settings.get("knowledge_top_k"),
+        "knowledge_chunk_size": business_settings.get("knowledge_chunk_size"),
+        "knowledge_chunk_overlap": business_settings.get("knowledge_chunk_overlap"),
+        "yaml_settings": yaml_settings,
+        "business_settings": business_settings,
+    }
 
 
 def _resolve_models_url(base_url: str | None, model_id: str | None = None) -> str:
@@ -73,6 +169,13 @@ def _resolve_models_url(base_url: str | None, model_id: str | None = None) -> st
 class ChatRequest(PydanticModel):
     conversation_id: str
     message: str
+    mode: Optional[str] = None
+    skill_ids: Optional[list[str]] = None
+
+
+class SkillImportRequest(PydanticModel):
+    url: str
+    overwrite: bool = False
 
 
 class CreateConversationRequest(PydanticModel):
@@ -82,6 +185,7 @@ class CreateConversationRequest(PydanticModel):
 class IrrigationControlRequest(PydanticModel):
     action: str
     duration_minutes: Optional[int] = 30
+    zone_id: Optional[str] = None
 
 
 class SettingsUpdateRequest(PydanticModel):
@@ -90,7 +194,6 @@ class SettingsUpdateRequest(PydanticModel):
     alarm_threshold: Optional[float] = None
     alarm_enabled: Optional[bool] = None
     collection_interval_minutes: Optional[int] = None
-    sensor_ids: Optional[list[str]] = None
     model_name: Optional[str] = None
     embedding_model_name: Optional[str] = None
     openai_base_url: Optional[str] = None
@@ -105,6 +208,7 @@ class PlanGenerateRequest(PydanticModel):
     zone_id: str
     conversation_id: Optional[str] = None
     trigger: str = "manual"
+    replace: bool = False
 
 
 class PlanDecisionRequest(PydanticModel):
@@ -114,6 +218,171 @@ class PlanDecisionRequest(PydanticModel):
 
 class PlanExecuteRequest(PydanticModel):
     actor: str = "user"
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _infer_mode_from_message(message: str, working_memory: dict[str, Any] | None) -> str:
+    normalized = (message or "").strip().lower()
+    if not normalized:
+        return DEFAULT_AGENT_MODE
+
+    safe_memory = working_memory or {}
+    has_pending_plan = bool(safe_memory.get("latest_pending_plan_ids"))
+    has_approved_plan = bool(safe_memory.get("latest_approved_plan_ids"))
+    is_inquiry = _contains_any(normalized, INQUIRY_KEYWORDS)
+    has_operator_command = _contains_any(normalized, OPERATOR_KEYWORDS)
+
+    # 只有明确要求变更计划或执行设备时才进入高权限路径，避免查询类请求误触发 operator。
+    if has_operator_command and not is_inquiry:
+        return "operator"
+    if (has_pending_plan or has_approved_plan) and normalized in {"批准它", "执行它", "approve it", "execute it", "reject it"}:
+        return "operator"
+    if _contains_any(normalized, AUDIT_KEYWORDS):
+        return "auditor"
+    if _contains_any(normalized, PLANNING_KEYWORDS):
+        return "planner"
+    return "advisor"
+
+
+def _infer_latest_plan_command(message: str) -> str | None:
+    normalized = (message or "").strip().lower()
+    if not normalized:
+        return None
+    if not _contains_any(normalized, PLAN_REFERENCE_KEYWORDS):
+        return None
+    if _contains_any(normalized, EXECUTE_KEYWORDS):
+        return "execute"
+    if _contains_any(normalized, APPROVE_KEYWORDS):
+        return "approve"
+    if _contains_any(normalized, REJECT_KEYWORDS):
+        return "reject"
+    return None
+
+
+def _build_direct_plan_reply(db: Session, message: str, working_memory: dict[str, Any] | None) -> dict[str, Any] | None:
+    command = _infer_latest_plan_command(message)
+    if not command:
+        return None
+
+    safe_memory = working_memory or {}
+    latest_plan_ids = [str(item) for item in safe_memory.get("latest_plan_ids", []) if item]
+    plan = get_plan_by_id(db, latest_plan_ids[-1]) if latest_plan_ids else None
+    if not plan:
+        active_zone_ids = [str(item) for item in safe_memory.get("active_zone_ids", []) if item]
+        for zone_id in reversed(active_zone_ids):
+            plan = get_open_plan_for_zone(db, zone_id)
+            if plan:
+                break
+    if not plan:
+        return {
+            "plan": None,
+            "text": "当前没有可处理的打开计划。请先生成新的 start 计划，或查看最新建议结果。",
+        }
+
+    plan_payload = plan.to_dict()
+    zone_name = plan_payload.get("zone_name") or plan_payload.get("zone_id") or "当前分区"
+    plan_id = plan_payload.get("plan_id") or latest_plan_ids[-1]
+    proposed_action = str(plan_payload.get("proposed_action") or "")
+    plan_status = str(plan_payload.get("status") or "")
+    approval_status = str(plan_payload.get("approval_status") or "")
+    execution_status = str(plan_payload.get("execution_status") or "")
+
+    if command == "execute":
+        if plan_status == "executing":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）正在执行中，无需重复发起执行。",
+            }
+        if plan_status == "completed" or execution_status in {"executed", "stopped", "completed"}:
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经执行过，执行状态为 {execution_status}，不需要重复执行。",
+            }
+        if proposed_action != "start":
+            return {
+                "plan": plan_payload,
+                "text": (
+                    f"当前计划（计划编号：{plan_id}）针对 {zone_name} 的建议动作为 {proposed_action or 'hold'}，"
+                    "不是启动灌溉的 start 计划，因此不能执行。"
+                ),
+            }
+        if plan_status == "pending_approval":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）还在待审批状态，需先批准后才能执行。",
+            }
+        if plan_status == "rejected":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已被拒绝，不能执行。请重新生成新的灌溉计划。",
+            }
+        if plan_status in {"cancelled", "superseded"}:
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经失效，不能执行。请重新生成新的灌溉计划。",
+            }
+        return None
+
+    if command == "approve":
+        if plan_status == "approved":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经批准过，无需重复批准。",
+            }
+        if plan_status == "executing":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经在执行中，不需要再次批准。",
+            }
+        if plan_status == "completed":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经完成，不需要再次批准。",
+            }
+        if plan_status == "rejected":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已被拒绝，不能再直接批准，建议重新生成计划。",
+            }
+        if plan_status in {"cancelled", "superseded"}:
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经失效，不能再直接批准，建议重新生成计划。",
+            }
+        return None
+
+    if command == "reject":
+        if plan_status == "executing":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经在执行中，不能再执行拒绝操作。",
+            }
+        if plan_status == "completed":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经完成，不需要再执行拒绝操作。",
+            }
+        if plan_status == "rejected":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经处于拒绝状态，无需重复操作。",
+            }
+        if plan_status == "approved":
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经批准，如需变更，建议重新生成新的计划。",
+            }
+        if plan_status in {"cancelled", "superseded"}:
+            return {
+                "plan": plan_payload,
+                "text": f"当前计划（计划编号：{plan_id}）已经失效，无需再执行拒绝操作。",
+            }
+        return None
+
+    return None
 
 
 def get_db():
@@ -162,11 +431,72 @@ async def tool_traces(limit: int = 20, conversation_id: Optional[str] = None, _:
     return {"tool_traces": await persistence.list_tool_traces(limit=limit, conversation_id=conversation_id)}
 
 
+@router.get("/skills")
+async def list_skills(_: User = Depends(require_permission("chat:view"))):
+    runtime = get_skill_runtime()
+    return {"skills": [skill.to_public_dict() for skill in runtime.list_skills()]}
+
+
+@router.post("/skills/import")
+async def import_skill(
+    req: SkillImportRequest,
+    current_user: User = Depends(require_permission("settings:manage")),
+):
+    runtime = get_skill_runtime()
+    try:
+        skill, result = runtime.import_skill_from_url(req.url, overwrite=req.overwrite)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info("[skills] %s imported skill %s from %s", current_user.username, skill.id, req.url)
+    return {"skill": skill.to_public_dict(include_detail=True), "import_result": result}
+
+
+@router.get("/skills/{skill_id}")
+async def get_skill(skill_id: str, _: User = Depends(require_permission("chat:view"))):
+    runtime = get_skill_runtime()
+    skill = runtime.get_skill(skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="skill 不存在")
+    return {"skill": skill.to_public_dict(include_detail=True)}
+
+
+@router.delete("/skills/{skill_id}")
+async def delete_skill(
+    skill_id: str,
+    current_user: User = Depends(require_permission("settings:manage")),
+):
+    runtime = get_skill_runtime()
+    try:
+        skill = runtime.delete_skill(skill_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info("[skills] %s deleted skill %s", current_user.username, skill.id)
+    return {"success": True, "skill": skill.to_public_dict(include_detail=True)}
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view"))):
     persistence = get_hydro_persistence()
     if not await persistence.thread_exists(req.conversation_id):
         raise HTTPException(status_code=404, detail="会话不存在")
+
+    working_memory = await persistence.get_working_memory(req.conversation_id) or {}
+    resolved_mode = normalize_mode(_infer_mode_from_message(req.message, working_memory))
+    db = SessionLocal()
+    try:
+        farm_context = list_farm_context(db)
+        direct_plan_reply = _build_direct_plan_reply(db, req.message, working_memory)
+    finally:
+        db.close()
+    skill_context = get_skill_runtime().resolve_for_chat(
+        mode=resolved_mode,
+        message=req.message,
+        explicit_skill_ids=[],
+        working_memory=working_memory,
+        farm_context=farm_context,
+    )
 
     async def generate():
         from src.llm.langchain_agent import get_hydro_agent
@@ -179,15 +509,58 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
         assistant_preview_parts: list[str] = []
         trace_id = f"trace_{uuid.uuid4().hex[:12]}"
         step_index = 0
+        collected_events: list[dict[str, Any]] = []
 
         try:
+            if direct_plan_reply:
+                if isinstance(direct_plan_reply.get("plan"), dict):
+                    plan_event = {
+                        "type": "plan_updated",
+                        "plan": direct_plan_reply["plan"],
+                        "plan_id": direct_plan_reply["plan"].get("plan_id"),
+                        "zone_id": direct_plan_reply["plan"].get("zone_id"),
+                        "active_skills": skill_context.active_skill_ids,
+                    }
+                    collected_events.append(plan_event)
+                    plan_event_payload = _build_plan_event_payload(req.conversation_id, plan_event, trace_id=trace_id)
+                    if plan_event_payload:
+                        await persistence.record_plan_event(req.conversation_id, plan_event_payload)
+                    yield f"data: {json.dumps(plan_event, ensure_ascii=False)}\n\n"
+                assistant_preview_parts.append(str(direct_plan_reply["text"]))
+                yield f"data: {json.dumps({'type': 'text', 'content': direct_plan_reply['text']}, ensure_ascii=False)}\n\n"
+                working_memory_payload = _build_working_memory_payload(
+                    previous=working_memory,
+                    message=req.message,
+                    assistant_content=str(direct_plan_reply["text"]),
+                    mode=resolved_mode,
+                    skill_context=skill_context,
+                    events=collected_events,
+                )
+                await persistence.record_working_memory(req.conversation_id, working_memory_payload)
+                yield f"data: {json.dumps({'type': 'done', 'working_memory': working_memory_payload, 'inferred_mode': resolved_mode}, ensure_ascii=False)}\n\n"
+                return
+
             async for event in agent.chat_stream(
                 [{"role": "user", "content": req.message}],
                 conversation_id=req.conversation_id,
+                mode=resolved_mode,
+                runtime_context={
+                    "active_skill_ids": skill_context.active_skill_ids,
+                    "allowed_tools": skill_context.allowed_tools,
+                    "prompt_fragments": skill_context.prompt_fragments,
+                    "resources": skill_context.resources,
+                    "reason": skill_context.reason,
+                    "conflicts": skill_context.conflicts,
+                    "phase_overrides": skill_context.workflow_overrides,
+                    "workflow_phases": skill_context.workflow_phases,
+                },
+                working_memory=working_memory,
             ):
                 event_type = event.get("type")
                 if event_type == "text":
                     assistant_preview_parts.append(event.get("content", ""))
+                if event_type != "done":
+                    collected_events.append(dict(event))
                 trace_payload = _build_trace_event_payload(
                     conversation_id=req.conversation_id,
                     trace_id=trace_id,
@@ -197,7 +570,12 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
                 if trace_payload:
                     step_index += 1
                     await persistence.record_trace_event(req.conversation_id, trace_payload)
-                decision_payload = _build_decision_event_payload(req.conversation_id, event)
+                decision_payload = _build_decision_event_payload(
+                    req.conversation_id,
+                    event,
+                    trace_id=trace_id,
+                    skill_ids=skill_context.active_skill_ids,
+                )
                 if decision_payload:
                     await persistence.record_decision_async(decision_payload, thread_id=req.conversation_id)
                 plan_event_payload = _build_plan_event_payload(req.conversation_id, event, trace_id=trace_id)
@@ -206,6 +584,19 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
                 outbound_event = dict(event)
                 if event_type != "done":
                     outbound_event["trace_id"] = trace_id
+                    outbound_event["inferred_mode"] = resolved_mode
+                if event_type == "done":
+                    working_memory_payload = _build_working_memory_payload(
+                        previous=working_memory,
+                        message=req.message,
+                        assistant_content="".join(part for part in assistant_preview_parts if part).strip(),
+                        mode=resolved_mode,
+                        skill_context=skill_context,
+                        events=collected_events,
+                    )
+                    await persistence.record_working_memory(req.conversation_id, working_memory_payload)
+                    outbound_event["working_memory"] = working_memory_payload
+                    outbound_event["inferred_mode"] = resolved_mode
                 yield f"data: {json.dumps(outbound_event, ensure_ascii=False)}\n\n"
                 if event_type == "done":
                     break
@@ -235,7 +626,7 @@ def _build_trace_event_payload(
     event: dict,
 ) -> dict | None:
     event_type = event.get("type")
-    if event_type not in {"tool_call", "tool_result", "subagent_handoff", "subagent_result"}:
+    if event_type not in {"tool_call", "tool_result"}:
         return None
 
     next_index = step_index + 1
@@ -260,6 +651,8 @@ def _build_trace_event_payload(
             "agent_name": event.get("agent_name"),
             "node_name": event.get("node_name"),
             "layer": "tool",
+            "phase": event.get("phase"),
+            "active_skills": event.get("active_skills") or [],
             "title": "工具调用",
             "detail": f"{source}{tool_name}",
             "created_at": created_at,
@@ -285,88 +678,18 @@ def _build_trace_event_payload(
             "agent_name": event.get("agent_name"),
             "node_name": event.get("node_name"),
             "layer": "tool",
+            "phase": event.get("phase"),
+            "active_skills": event.get("active_skills") or [],
             "title": "工具返回",
             "detail": f"{source}{event.get('output_preview') or f'{tool_name} 已返回结构化结果'}",
             "created_at": created_at,
         }
-
-    if event_type == "subagent_handoff":
-        subagent = str(event.get("subagent") or "subagent")
-        return {
-            "event_id": f"traceevt_{uuid.uuid4().hex[:12]}",
-            "trace_id": trace_id,
-            "conversation_id": conversation_id,
-            "step_index": next_index,
-            "event_type": "subagent_handoff",
-            "status": "running",
-            "tool_name": None,
-            "subagent_name": subagent,
-            "zone_id": event.get("zone_id"),
-            "plan_id": event.get("plan_id"),
-            "input_preview": None,
-            "output_preview": str(event.get("task_description") or ""),
-            "duration_ms": None,
-            "agent_name": event.get("agent_name"),
-            "node_name": event.get("node_name"),
-            "layer": "subagent",
-            "title": f"委派 {subagent}",
-            "detail": f"{event.get('zone_id') or '待识别分区'} · {event.get('task_description') or '正在准备任务说明'}",
-            "created_at": created_at,
-        }
-
-    subagent = str(event.get("subagent") or "subagent")
-    return {
-        "event_id": f"traceevt_{uuid.uuid4().hex[:12]}",
-        "trace_id": trace_id,
-        "conversation_id": conversation_id,
-        "step_index": next_index,
-        "event_type": "subagent_result",
-        "status": "success",
-        "tool_name": None,
-        "subagent_name": subagent,
-        "zone_id": event.get("zone_id"),
-        "plan_id": event.get("plan_id"),
-        "input_preview": None,
-        "output_preview": str(event.get("result_preview") or "子代理已完成处理"),
-        "duration_ms": None,
-        "agent_name": event.get("agent_name"),
-        "node_name": event.get("node_name"),
-        "layer": "subagent",
-        "title": f"{subagent} 已返回",
-        "detail": str(event.get("result_preview") or "子代理已完成处理"),
-        "created_at": created_at,
-    }
+    return None
 
 
-def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | None:
+def _build_decision_event_payload(conversation_id: str, event: dict, *, trace_id: str | None, skill_ids: list[str]) -> dict | None:
     event_type = event.get("type")
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    if event_type in {"subagent_handoff", "subagent_result"}:
-        subagent = str(event.get("subagent") or "unknown")
-        status = "started" if event_type == "subagent_handoff" else "completed"
-        reasoning = f"Supervisor {'delegated work to' if status == 'started' else 'received completion from'} {subagent}."
-        return {
-            "decision_id": f"decision_{uuid.uuid4().hex[:12]}",
-            "trigger": "chat",
-            "zone_id": event.get("zone_id"),
-            "plan_id": event.get("plan_id"),
-            "input_context": {
-                "conversation_id": conversation_id,
-                "event": event_type,
-                "task_description": event.get("task_description"),
-            },
-            "reasoning_chain": reasoning,
-            "tools_used": ["task"],
-            "decision_result": {
-                "subagent": subagent,
-                "status": status,
-                "result_preview": event.get("result_preview"),
-            },
-            "reflection_notes": "Captured from official LangGraph streaming updates.",
-            "effectiveness_score": None,
-            "created_at": created_at,
-        }
 
     if event_type == "approval_requested":
         details = event.get("details") if isinstance(event.get("details"), dict) else {}
@@ -375,6 +698,9 @@ def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | N
             "trigger": "chat",
             "zone_id": details.get("zone_id"),
             "plan_id": details.get("plan_id"),
+            "trace_id": trace_id,
+            "source": "chat_agent",
+            "skill_ids": skill_ids,
             "input_context": {"conversation_id": conversation_id, "event": event_type},
             "reasoning_chain": "Agent blocked a start-like action because approval is required before execution.",
             "tools_used": [str(event.get("tool") or "control_irrigation")],
@@ -382,7 +708,36 @@ def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | N
                 "status": "approval_requested",
                 "details": details,
             },
+            "evidence_refs": {"zone_id": details.get("zone_id"), "plan_id": details.get("plan_id")},
             "reflection_notes": "Approval boundary enforced before irrigation execution.",
+            "effectiveness_score": None,
+            "created_at": created_at,
+        }
+
+    if event_type == "suggestion_result":
+        suggestion = event.get("suggestion") if isinstance(event.get("suggestion"), dict) else {}
+        return {
+            "decision_id": f"decision_{uuid.uuid4().hex[:12]}",
+            "trigger": "chat",
+            "zone_id": suggestion.get("zone_id"),
+            "plan_id": None,
+            "trace_id": trace_id,
+            "source": "chat_agent",
+            "skill_ids": skill_ids,
+            "input_context": {"conversation_id": conversation_id, "event": event_type},
+            "reasoning_chain": "Agent recorded a non-executable irrigation suggestion instead of creating a formal start plan.",
+            "tools_used": ["create_irrigation_plan"],
+            "decision_result": {
+                "status": "suggestion_only",
+                "suggestion_id": suggestion.get("suggestion_id"),
+                "proposed_action": suggestion.get("proposed_action"),
+                "risk_level": suggestion.get("risk_level"),
+            },
+            "evidence_refs": {
+                "zone_id": suggestion.get("zone_id"),
+                "suggestion_id": suggestion.get("suggestion_id"),
+            },
+            "reflection_notes": str(suggestion.get("reasoning_summary") or "Captured from structured suggestion output."),
             "effectiveness_score": None,
             "created_at": created_at,
         }
@@ -399,6 +754,9 @@ def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | N
             "trigger": "chat",
             "zone_id": plan.get("zone_id"),
             "plan_id": plan.get("plan_id"),
+            "trace_id": trace_id,
+            "source": "chat_agent",
+            "skill_ids": skill_ids,
             "input_context": {"conversation_id": conversation_id, "event": event_type},
             "reasoning_chain": {
                 "plan_proposed": "Agent generated a structured irrigation plan after collecting evidence.",
@@ -417,6 +775,7 @@ def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | N
                 "risk_level": plan.get("risk_level"),
                 "proposed_action": plan.get("proposed_action"),
             },
+            "evidence_refs": {"zone_id": plan.get("zone_id"), "plan_id": plan.get("plan_id")},
             "reflection_notes": str(plan.get("reasoning_summary") or "Captured from official LangGraph streaming updates."),
             "effectiveness_score": None,
             "created_at": created_at,
@@ -427,8 +786,26 @@ def _build_decision_event_payload(conversation_id: str, event: dict) -> dict | N
 
 def _build_plan_event_payload(conversation_id: str, event: dict, *, trace_id: str | None = None) -> dict | None:
     event_type = event.get("type")
-    if event_type not in {"plan_proposed", "plan_updated", "approval_result", "execution_result"}:
+    if event_type not in {"plan_proposed", "plan_updated", "approval_result", "execution_result", "suggestion_result"}:
         return None
+
+    if event_type == "suggestion_result":
+        suggestion = event.get("suggestion") if isinstance(event.get("suggestion"), dict) else None
+        if not suggestion:
+            return None
+        suggestion_id = str(suggestion.get("suggestion_id") or "").strip()
+        if not suggestion_id:
+            return None
+        return {
+            "event_id": f"planevt_{uuid.uuid4().hex[:12]}",
+            "conversation_id": conversation_id,
+            "event_type": event_type,
+            "suggestion_id": suggestion_id,
+            "suggestion": suggestion,
+            "trace_id": trace_id,
+            "active_skills": event.get("active_skills") or [],
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
 
     plan = event.get("plan") if isinstance(event.get("plan"), dict) else None
     if not plan:
@@ -445,7 +822,81 @@ def _build_plan_event_payload(conversation_id: str, event: dict, *, trace_id: st
         "plan_id": plan_id,
         "plan": plan,
         "trace_id": trace_id,
+        "active_skills": event.get("active_skills") or [],
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+
+def _build_working_memory_payload(
+    *,
+    previous: dict[str, Any],
+    message: str,
+    assistant_content: str,
+    mode: str,
+    skill_context: Any,
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    active_zone_ids = list(dict.fromkeys(str(item) for item in previous.get("active_zone_ids", []) if item))
+    latest_plan_ids = list(dict.fromkeys(str(item) for item in previous.get("latest_plan_ids", []) if item))
+    pending_plan_ids = list(dict.fromkeys(str(item) for item in previous.get("latest_pending_plan_ids", []) if item))
+    approved_plan_ids = list(dict.fromkeys(str(item) for item in previous.get("latest_approved_plan_ids", []) if item))
+    open_risks = list(dict.fromkeys(str(item) for item in previous.get("open_risks", []) if item))
+    anomalies = list(previous.get("last_sensor_anomalies", []))
+
+    for event in events:
+        zone_id = event.get("zone_id")
+        if isinstance(zone_id, str) and zone_id and zone_id not in active_zone_ids:
+            active_zone_ids.append(zone_id)
+        plan = event.get("plan") if isinstance(event.get("plan"), dict) else {}
+        suggestion = event.get("suggestion") if isinstance(event.get("suggestion"), dict) else {}
+        plan_id = event.get("plan_id") or plan.get("plan_id")
+        if isinstance(plan_id, str) and plan_id and plan_id not in latest_plan_ids:
+            latest_plan_ids.append(plan_id)
+        if isinstance(plan_id, str) and plan_id:
+            if plan_id in pending_plan_ids:
+                pending_plan_ids.remove(plan_id)
+            if plan_id in approved_plan_ids:
+                approved_plan_ids.remove(plan_id)
+            if plan.get("status") == "pending_approval" and plan_id not in pending_plan_ids:
+                pending_plan_ids.append(plan_id)
+            if plan.get("status") == "approved" and plan_id not in approved_plan_ids:
+                approved_plan_ids.append(plan_id)
+        if event.get("type") == "approval_requested":
+            details = event.get("details") if isinstance(event.get("details"), dict) else {}
+            for reason in details.get("reasons") or []:
+                text = str(reason).strip()
+                if text and text not in open_risks:
+                    open_risks.append(text)
+        risk_level = str(plan.get("risk_level") or "").strip()
+        if not risk_level:
+            risk_level = str(suggestion.get("risk_level") or "").strip()
+        if risk_level:
+            risk_text = f"plan:{risk_level}"
+            if risk_text not in open_risks:
+                open_risks.append(risk_text)
+        suggestion_zone_id = suggestion.get("zone_id")
+        if isinstance(suggestion_zone_id, str) and suggestion_zone_id and suggestion_zone_id not in active_zone_ids:
+            active_zone_ids.append(suggestion_zone_id)
+        if event.get("tool") == "anomaly_detection":
+            result = event.get("result") if isinstance(event.get("result"), dict) else {}
+            anomaly_count = result.get("anomaly_count")
+            if anomaly_count:
+                anomalies.append({"zone_id": zone_id, "anomaly_count": anomaly_count})
+
+    return {
+        "memory_id": f"memory_{uuid.uuid4().hex[:12]}",
+        "last_inferred_mode": mode,
+        "active_skills": skill_context.active_skill_ids,
+        "active_zone_ids": active_zone_ids[-10:],
+        "latest_plan_ids": latest_plan_ids[-10:],
+        "latest_pending_plan_ids": pending_plan_ids[-10:],
+        "latest_approved_plan_ids": approved_plan_ids[-10:],
+        "open_risks": open_risks[-10:],
+        "last_user_goal": message,
+        "last_decision_summary": assistant_content[:500] if assistant_content else "",
+        "last_sensor_anomalies": anomalies[-10:],
+        "skill_reason": skill_context.reason,
+        "last_updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 
@@ -498,25 +949,47 @@ async def generate_plan(
     current_user: User = Depends(require_permission("plans:create")),
 ):
     try:
-        plan = create_plan(
+        result = generate_plan_result(
             db,
             req.zone_id,
             conversation_id=req.conversation_id,
             trigger=req.trigger,
             requested_by="api",
+            replace=req.replace,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    plan_payload = result.get("plan") if isinstance(result.get("plan"), dict) else None
+    suggestion_payload = result.get("suggestion") if isinstance(result.get("suggestion"), dict) else None
+    audit_object_type = "plan" if plan_payload else "suggestion"
+    audit_object_id = (
+        plan_payload.get("plan_id")
+        if plan_payload
+        else suggestion_payload.get("suggestion_id")
+        if suggestion_payload
+        else req.zone_id
+    )
     record_audit_event(
         db,
         actor=current_user.username,
         event_type="plan.generate",
-        object_type="plan",
-        object_id=plan.plan_id,
-        details={"zone_id": req.zone_id, "trigger": req.trigger},
+        object_type=audit_object_type,
+        object_id=audit_object_id,
+        details={"zone_id": req.zone_id, "trigger": req.trigger, "replace": req.replace, "reused_existing": result.get("reused_existing")},
     )
-    await _record_plan_event_if_needed("plan_proposed", plan.to_dict())
-    return {"plan": plan.to_dict()}
+    if plan_payload:
+        await _record_plan_event_if_needed("plan_proposed", plan_payload)
+    if suggestion_payload and req.conversation_id:
+        persistence = get_hydro_persistence()
+        event_payload = _build_plan_event_payload(
+            req.conversation_id,
+            {"type": "suggestion_result", "suggestion": suggestion_payload},
+            trace_id=None,
+        )
+        if event_payload:
+            await persistence.record_plan_event(req.conversation_id, event_payload)
+    return result
 
 
 @router.get("/plans/{plan_id}")
@@ -661,7 +1134,7 @@ async def control_irrigation(
     current_user: User = Depends(require_permission("plans:execute")),
 ):
     try:
-        result = manual_override_control(db, req.action, duration_minutes=req.duration_minutes or 30)
+        result = manual_override_control(db, req.action, duration_minutes=req.duration_minutes or 30, zone_id=req.zone_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     result["state"] = summarize_system_irrigation(db)
@@ -706,10 +1179,16 @@ async def get_decisions(limit: int = 20, _: User = Depends(require_permission("h
 
 
 @router.get("/settings")
-async def get_settings(_: User = Depends(require_permission("settings:view"))):
+async def get_settings(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("settings:view")),
+):
     from src.config import config
 
-    return config.get_runtime_settings()
+    ensure_system_settings(db)
+    yaml_settings = config.get_yaml_settings()
+    business_settings = get_system_settings_snapshot(db)
+    return _build_settings_response(yaml_settings=yaml_settings, business_settings=business_settings)
 
 
 @router.put("/settings")
@@ -721,10 +1200,24 @@ async def update_settings(
     from src.config import config
 
     updates = req.model_dump(exclude_none=True) if hasattr(req, "model_dump") else req.dict(exclude_none=True)
-    settings = config.update_runtime_settings(updates)
+    yaml_update_keys = {
+        "model_name",
+        "embedding_model_name",
+        "openai_base_url",
+        "openai_api_key",
+        "embedding_api_key",
+    }
+    yaml_updates = {key: value for key, value in updates.items() if key in yaml_update_keys}
+    business_updates = {key: value for key, value in updates.items() if key not in yaml_update_keys}
+
+    yaml_settings = config.get_yaml_settings()
+    if yaml_updates:
+        yaml_settings = config.update_yaml_settings(yaml_updates)
+    business_settings = update_system_settings(db, business_updates) if business_updates else get_system_settings_snapshot(db)
+    settings = _build_settings_response(yaml_settings=yaml_settings, business_settings=business_settings)
     reload_error = None
     reloaded = False
-    if _should_reload_agent(updates):
+    if _should_reload_agent(yaml_updates):
         from src.llm.langchain_agent import get_hydro_agent
 
         try:

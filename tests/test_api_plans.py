@@ -20,6 +20,7 @@ try:
     from src.services.alert_service import evaluate_alerts
     from src.services.auth_service import ensure_auth_seed
     from src.services.irrigation_service import bootstrap_default_zones
+    from src.services.system_settings_service import ensure_system_settings
 
     DEPS_AVAILABLE = True
 except ModuleNotFoundError:
@@ -44,6 +45,7 @@ class TestAdminApi(unittest.TestCase):
 
     def setUp(self):
         self.db = self.SessionLocal()
+        ensure_system_settings(self.db)
         bootstrap_default_zones(self.db)
         ensure_auth_seed(self.db)
         app = FastAPI()
@@ -115,7 +117,18 @@ class TestAdminApi(unittest.TestCase):
         payload = update_response.json()["settings"]
         self.assertEqual(payload["model_name"], "gpt-4o-mini")
         self.assertTrue(payload["openai_api_key_status"]["configured"])
+        self.assertIn("yaml_settings", payload)
+        self.assertIn("business_settings", payload)
         self.assertNotIn("sk-test-secret", str(payload))
+
+    def test_settings_payload_includes_business_settings(self):
+        response = self.client.get("/api/settings", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("yaml_settings", payload)
+        self.assertIn("business_settings", payload)
+        self.assertIn("soil_moisture_threshold", payload)
+        self.assertIn("collection_interval_minutes", payload)
 
     def test_knowledge_document_endpoints(self):
         class FakeCollection:

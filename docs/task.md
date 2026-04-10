@@ -1,92 +1,103 @@
-# SmartIrrigation
+# HydroAgent 毕业设计开发任务清单
 
-## Task List (开发任务清单)
+本文档按当前架构记录项目完成度。早期 `SmartIrrigation` 版本以 CLI、Gradio 和单模块类为主；当前系统已经演进为 FastAPI 后端、服务层业务编排、MCP / LLM 工具链和 Next.js 前端控制台。
 
-1. **环境设置与项目初始化:**
-    * [x] 创建项目结构 (文件夹、虚拟环境)。
-    * [x] 初始化版本控制 (如 Git)。
-    * [x] 安装基础依赖库 (Python, pip)。
-2. **配置管理模块:**
-    * [x] 设计并实现配置加载机制 (如 .env, YAML/JSON 文件)。
-    * [x] 定义配置项 (数据库连接信息, API 密钥, 传感器 ID, 灌溉策略参数, 报警阈值, 日志级别等)。
-3. **数据库模块:**
-    * [x] 选择数据库 (如 PostgreSQL, MySQL) 和 ORM (如 SQLAlchemy) 或数据库驱动。
-    * [x] 定义数据库表模型 (sensor_data, weather_data, irrigation_log, user) - 可放在 `models.py` 或类似文件中。
-    * [x] 实现数据库连接和会话管理。
-    * [x] 实现基础的 CRUD (创建、读取、更新、删除) 操作函数或类。
-4. **异常处理模块:**
-    * [x] 定义自定义异常类 (如 `InvalidSensorData`, `WeatherAPIError`, `LLMCommandError` 等) - 可放在 `exceptions.py` 中。
-    * [x] 配置日志记录器 (使用 `logging` 模块) - 可放在 `logger_config.py` 或 `utils.py` 中。
-5. **数据采集模块 (`data_collection.py`):**
-    * [x] 实现 `DataCollectionModule` 类。
-    * [x] 实现 `__init__` 方法，初始化传感器 ID。
-    * [x] 实现 `get_data` 方法 (模拟或实际读取传感器数据)。
-    * [x] 集成配置模块，读取传感器 ID 和采集频率等设置。
-    * [x] 添加适当的日志记录和异常处理。
-6. **数据处理模块 (`data_processing.py`):**
-    * [x] 实现 `DataProcessingModule` 类。
-    * [x] 实现 `__init__` 方法，初始化天气 API 密钥等配置。
-    * [x] 实现 `process_sensor_data` 方法 (数据清洗、验证)。
-    * [x] 实现 `get_weather_data` 方法 (调用外部天气 API)。
-    * [x] 实现 `process_and_get_weather` 方法 (组合处理流程)。
-    * [x] 集成配置模块读取 API Key。
-    * [x] 添加适当的日志记录和异常处理 (捕获 API 调用错误等)。
-7. **机器学习模型模块 (`ml_model.py`):**
-    * [ ] 实现 `SoilMoisturePredictor` 类。
-    * [ ] 实现 `__init__` 方法 (模型结构参数)。
-    * [ ] 实现 `_initialize_model` (定义 LSTM 或其他模型结构 - 使用 PyTorch 或 TensorFlow/Keras)。
-    * [ ] 实现 `_load_pretrained_model` 方法 (加载模型权重)。
-    * [ ] 实现 `load_model` 方法 (封装加载逻辑)。
-    * [ ] 实现 `_preprocess_data` 方法 (数据归一化等)。
-    * [ ] 实现 `predict` 方法 (执行预测)。
-    * [ ] (可选) 实现 `train` 方法 (模型训练逻辑)。
-    * [ ] 添加适当的日志记录和异常处理 (模型加载失败、预测失败等)。
-8. **LLM 智能体模块 (`llm_agent.py`):**
-    * [ ] 实现 `LLMAgentModule` 类。
-    * [ ] 实现 `__init__` 方法 (注入 ML 模型实例、灌溉策略)。
-    * [ ] 实现 `parse_command` 方法 (解析自然语言指令 - 可能需要集成 NLP 库或调用外部 LLM API)。
-    * [ ] 实现 `predict_humidity` 方法 (调用 ML 模型)。
-    * [ ] 实现 `make_decision` 方法 (根据策略生成灌溉指令)。
-    * [ ] 实现 `generate_alarm` 方法 (生成报警信息)。
-    * [ ] 集成配置模块读取灌溉策略。
-    * [ ] 添加适当的日志记录和异常处理 (命令解析失败等)。
-9. **控制执行模块 (`control_execution.py`):**
-    * [ ] 实现 `ControlExecutionModule` 类。
-    * [ ] 实现 `__init__` 方法 (初始化设备状态)。
-    * [ ] 实现 `start_irrigation` 方法 (模拟或实际控制硬件)。
-    * [ ] 实现 `stop_irrigation` 方法 (模拟或实际控制硬件)。
-    * [ ] 实现 `get_status` 方法。
-    * [ ] 集成数据库模块记录灌溉日志 (`irrigation_log` 表)。
-    * [ ] 添加适当的日志记录和异常处理 (设备控制失败等)。
-10. **报警模块 (`alarm.py`):**
-    * [ ] 实现 `AlarmModule` 类。
-    * [ ] 实现 `__init__` 方法 (初始化报警阈值)。
-    * [ ] 实现 `check_humidity` 方法。
-    * [ ] 实现 `send_alarm` 方法 (打印、日志记录、或集成外部通知服务如邮件/短信)。
-    * [ ] 实现 `handle_alarm` 方法 (组合检查和发送逻辑)。
-    * [ ] 实现 `enable_alarm` / `disable_alarm` 方法。
-    * [ ] 集成配置模块读取报警阈值。
-11. **用户界面模块 (`app.py` 或 `ui.py`):**
-    * [ ] 实现 `UserInterfaceModule` 类 (或直接使用函数式方法构建 Gradio 界面)。
-    * [ ] 实现 `__init__` (注入 LLM Agent 实例)。
-    * [ ] 实现 `handle_user_input` 方法 (调用 LLM Agent 处理输入)。
-    * [ ] 实现 `create_ui` 方法 (使用 Gradio 构建界面组件和布局)。
-    * [ ] 启动 Gradio 应用。
-12. **主程序/服务入口 (`main.py`):**
-    * [ ] 实例化各模块。
-    * [ ] 处理模块间的依赖注入。
-    * [ ] 启动主流程 (例如，启动数据采集定时任务、启动 Gradio 服务)。
-13. **安全模块 (`security.py` 或集成到 UI/API 层):**
-    * [ ] 实现用户认证逻辑 (JWT)。
-    * [ ] 实现密码哈希存储和验证 (bcrypt)。
-    * [ ] 实现基于角色的访问控制 (RBAC)。
-    * [ ] 实现输入过滤和输出转义 (防 XSS, Prompt 注入)。
-    * [ ] 实现 CSRF 防护 (如果需要 Web 表单)。
-14. **测试:**
-    * [ ] 编写单元测试 (覆盖各模块核心功能)。
-    * [ ] 编写集成测试 (测试模块间交互流程)。
-    * [ ] (可选) 编写性能测试和压力测试。
-15. **文档与部署:**
-    * [ ] 完善项目 README。
-    * [ ] 编写 API 文档 (如果需要)。
-    * [ ] 准备部署脚本或容器化 (Dockerfile)。
+## 1. 基础工程
+
+- [x] 建立 Python 后端项目结构。
+- [x] 建立 Next.js 前端项目结构。
+- [x] 提供本地启动脚本：`start.sh`、`start-backend.sh`、`start-frontend.sh`。
+- [x] 提供 Python 后端依赖文件：`requirements.txt`。
+- [x] 提供前端依赖与脚本：`frontend/package.json`。
+- [x] 提供 Dockerfile、docker-compose 和 GitHub Actions 镜像构建工作流。
+- [ ] 增加完整 CI：后端新架构测试、前端 typecheck、lint、build。
+
+## 2. 配置与安全
+
+- [x] 支持 YAML 与环境变量配置。
+- [x] 支持数据库、天气服务、传感器、灌溉阈值、告警、前端 CORS、模型和知识库参数配置。
+- [x] 支持运行时设置更新，并对 OpenAI / Embedding Key 做加密持久化与脱敏展示。
+- [x] 支持密码哈希、访问令牌、登录态校验。
+- [x] 支持 RBAC 权限模型、角色、权限和默认用户初始化。
+- [x] 支持管理操作审计。
+- [ ] 生产环境需替换默认 `HYDROAUTH_SECRET`，并在部署文档中强调密钥管理。
+
+## 3. 数据与持久化
+
+- [x] 使用 SQLAlchemy 定义业务数据模型。
+- [x] 覆盖传感器数据、天气数据、灌溉日志、用户、角色、权限、分区、传感器资产、执行器、灌溉计划、审批、执行事件、告警、审计、知识库文档和知识库切片。
+- [x] 支持 SQLite 开发环境和 PostgreSQL / MySQL 配置扩展。
+- [x] 支持开发环境 SQLite schema 自动补齐。
+- [x] 支持 LangGraph SQLite persistence 保存对话、决策和工具轨迹。
+- [ ] 正式交付前建议补充数据库 ER 图和字段说明。
+
+## 4. 数据采集与天气
+
+- [x] 实现传感器数据采集接口，当前默认使用合理范围随机数据模拟。
+- [x] 实现传感器数据清洗、缺失值处理和异常值处理。
+- [x] 实现天气查询和天气摘要能力。
+- [x] 决策服务能根据未来 48 小时降雨信号调整计划。
+- [x] 天气服务失败时提供兜底摘要，避免主流程中断。
+- [ ] 如需真实硬件演示，应新增传感器适配层并替换默认模拟采集。
+
+## 5. 灌溉计划与执行闭环
+
+- [x] 支持按分区生成灌溉计划。
+- [x] 计划包含 evidence、safety_review、risk_level、proposed_action、recommended_duration_minutes。
+- [x] 缺少传感器数据、执行器不可用、执行器已运行等情况会进入风险或阻断路径。
+- [x] 未来 48 小时存在降雨且未进入紧急湿度区间时，系统会建议暂缓灌溉。
+- [x] `start` 计划必须先审批再执行。
+- [x] 拒绝的计划不可执行。
+- [x] 执行后的计划只进入已执行状态，并写入执行事件和灌溉日志。
+- [x] 仪表盘手动覆盖会在同一事务链路中创建、审批并执行计划，仍保留审计记录。
+- [ ] 如需真实设备接入，应将 `Actuator` 状态更新替换为硬件驱动适配器调用。
+
+## 6. LLM 与 MCP
+
+- [x] 提供 HydroAgent 智能体入口。
+- [x] 支持聊天 SSE 流式返回。
+- [x] 支持会话列表、会话详情、删除会话。
+- [x] 支持工具调用轨迹、决策记录和计划事件持久化。
+- [x] 提供 MCP 工具：分区查询、传感器查询、天气查询、计划生成、审批、拒绝、执行、告警、统计分析等。
+- [x] 提供工具参数归一化解析模块。
+- [ ] 早期 `llm_agent.py` / `weather_tools.py` 兼容模块与新 `langchain_agent.py` 的接口需要整理，旧测试不应再作为主验收入口。
+
+## 7. 告警、资产、报表与知识库
+
+- [x] 支持告警规则初始化。
+- [x] 支持告警生成、确认和解决。
+- [x] 支持分区、传感器和执行器资产管理。
+- [x] 支持运营报表、审计报表和分区报表导出。
+- [x] 支持知识库文档创建、列表、详情、删除和检索。
+- [x] 支持 Chroma 向量库与 Embedding 配置。
+- [ ] 可补充知识库导入格式约束和异常处理说明。
+
+## 8. 前端控制台
+
+- [x] 使用 Next.js App Router 实现前端控制台。
+- [x] 支持登录、登出和基于权限的页面访问。
+- [x] 支持运营总览仪表盘。
+- [x] 支持智能对话页面和 SSE 响应渲染。
+- [x] 支持运营中心计划审批、执行与日志查看。
+- [x] 支持资产中心、知识库、告警中心、用户与角色、报表中心、审计记录、系统设置。
+- [x] 支持前端 API route 代理后端接口，统一携带认证 Cookie。
+- [x] 前端已通过 `npm run typecheck`、`npm run lint` 和 `npm run build`。
+
+## 9. 测试与验收
+
+- [x] 保留历史单元测试和部分新架构测试。
+- [x] 已存在覆盖计划生命周期、后台 API、告警审计、天气处理、配置、安全、数据库等方向的测试文件。
+- [ ] 旧测试需要按当前 FastAPI + 服务层架构重写。
+- [ ] `tests/test_main.py` 不应直接启动真实 Uvicorn，应改为 mock 启动函数。
+- [ ] 删除或隔离旧 Gradio / 旧 LangChain 兼容测试，避免与当前主链路混淆。
+- [ ] 增加后端主链路集成测试：登录、生成计划、审批、执行、日志、审计、告警。
+- [ ] 增加前端端到端演示测试或 Playwright 冒烟测试。
+
+## 10. 毕业设计交付材料
+
+- [x] README 已更新为当前架构说明。
+- [x] 已补充系统架构说明：`docs/architecture.md`。
+- [x] 已补充答辩演示脚本：`docs/demo_script.md`。
+- [x] 已明确仿真传感器、仿真执行器和 Dummy ML 模型边界。
+- [ ] 可补充论文中的需求分析、ER 图、时序图、测试计划和部署截图。
+- [ ] 可补充答辩 PPT 所需的系统截图、核心代码截图和演示录屏。
