@@ -312,7 +312,7 @@ export function ChatPanel({
     (initialActiveConversation?.messages || []).map((message, index) => toLocalMessage(message, index)),
   )
   const initialWorkingMemory = readWorkingMemory(initialActiveConversation)
-  const [workingMemory, setWorkingMemory] = useState<WorkingMemory | null>(initialWorkingMemory)
+  const [, setWorkingMemory] = useState<WorkingMemory | null>(initialWorkingMemory)
   const [input, setInput] = useState('')
   const [isPending, startTransition] = useTransition()
   const [isStreaming, setIsStreaming] = useState(false)
