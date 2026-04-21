@@ -2,8 +2,11 @@
 
 import ReactECharts from 'echarts-for-react'
 import { Activity, AlertTriangle, Droplets, Gauge, GitBranch, RadioTower, Waves } from 'lucide-react'
+import { SectionBadge } from '@/components/ui/section-badge'
+import { ACTION_LABELS, PLAN_STAGE_LABELS, STATUS_LABELS, labelFor } from '@/lib/labels'
 import { AnalyticsOverview, DashboardData, HistoryData, IrrigationPlan } from '@/lib/types'
-import { formatDateTime, formatNumber } from '@/lib/utils'
+import { formatNumber1 } from '@/lib/format'
+import { formatDateTime } from '@/lib/utils'
 
 type MlForecastPoint = {
   label: string
@@ -72,8 +75,8 @@ function buildFallbackOverview(dashboard: DashboardData): AnalyticsOverview {
     return {
       zone_id: zone.zone_id,
       zone_name: zone.name,
-      soil_moisture: Number(moisture.toFixed(2)),
-      deficit: Number(Math.max(0, threshold - moisture).toFixed(2)),
+      soil_moisture: Number(moisture.toFixed(1)),
+      deficit: Number(Math.max(0, threshold - moisture).toFixed(1)),
       actuator_status: zone.actuators[0]?.status || 'unknown',
       alert_count: moisture < threshold ? 1 : 0,
     }
@@ -234,7 +237,7 @@ function buildKpis(dashboard: DashboardData, overview: AnalyticsOverview, histor
     },
     {
       label: '平均湿度',
-      value: formatNumber(averageSoil, '%'),
+      value: formatNumber1(averageSoil, '%'),
       detail: dashboard.weather?.city || '未知城市',
       icon: Droplets,
       tone: averageSoil !== null && averageSoil < 35 ? 'warn' : 'ok',
@@ -264,11 +267,11 @@ function buildKpis(dashboard: DashboardData, overview: AnalyticsOverview, histor
 }
 
 function chartTextStyle() {
-  return { color: 'rgba(220, 252, 231, 0.74)', fontSize: 11 }
+  return { color: '#94A3B8', fontSize: 11 }
 }
 
 function chartAxisLine() {
-  return { lineStyle: { color: 'rgba(148, 163, 184, 0.22)' } }
+  return { lineStyle: { color: '#E2E8F0' } }
 }
 
 export function VisualizationConsole({
@@ -291,13 +294,33 @@ export function VisualizationConsole({
   const moistureOption = {
     backgroundColor: 'transparent',
     tooltip: { trigger: 'axis' },
-    legend: { top: 4, textStyle: chartTextStyle(), data: ['湿度', '阈值'] },
+    legend: { top: 4, textStyle: chartTextStyle(), data: ['土壤湿度', '阈值'] },
     grid: sharedGrid,
     xAxis: { type: 'category', data: dataOverview.soil_trend.labels, axisLabel: chartTextStyle(), axisLine: chartAxisLine() },
-    yAxis: { type: 'value', min: 0, max: 100, axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } } },
+    yAxis: { type: 'value', min: 0, max: 100, axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } } },
     series: [
-      { name: '湿度', type: 'line', smooth: true, symbolSize: 6, data: dataOverview.soil_trend.soil_moisture, lineStyle: { width: 3, color: '#34d399' }, itemStyle: { color: '#34d399' }, areaStyle: { color: 'rgba(52, 211, 153, 0.14)' } },
-      { name: '阈值', type: 'line', smooth: true, symbol: 'none', data: dataOverview.soil_trend.threshold, lineStyle: { width: 2, type: 'dashed', color: '#f59e0b' } },
+      {
+        name: '土壤湿度',
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        data: dataOverview.soil_trend.soil_moisture.map((value) => Number(value.toFixed(1))),
+        lineStyle: { width: 3, color: '#0052FF' },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(0, 82, 255, 0.22)' },
+              { offset: 1, color: 'rgba(0, 82, 255, 0)' },
+            ],
+          },
+        },
+      },
+      { name: '阈值', type: 'line', smooth: true, symbol: 'none', data: dataOverview.soil_trend.threshold.map((value) => Number(value.toFixed(1))), lineStyle: { width: 2, type: 'dashed', color: '#CBD5E1' } },
     ],
   }
 
@@ -305,14 +328,14 @@ export function VisualizationConsole({
     backgroundColor: 'transparent',
     tooltip: { trigger: 'item' },
     grid: sharedGrid,
-    xAxis: { type: 'category', data: dataOverview.plan_funnel.items.map((item) => item.stage), axisLabel: chartTextStyle(), axisLine: chartAxisLine() },
-    yAxis: { type: 'value', axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } } },
+    xAxis: { type: 'category', data: dataOverview.plan_funnel.items.map((item) => labelFor(item.stage, PLAN_STAGE_LABELS)), axisLabel: chartTextStyle(), axisLine: chartAxisLine() },
+    yAxis: { type: 'value', minInterval: 1, axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } } },
     series: [
       {
         type: 'bar',
         data: dataOverview.plan_funnel.items.map((item) => item.count),
         barWidth: 18,
-        itemStyle: { color: '#14b8a6', borderRadius: 4 },
+        itemStyle: { color: '#0052FF', borderRadius: [8, 8, 0, 0] },
       },
     ],
   }
@@ -320,14 +343,14 @@ export function VisualizationConsole({
   const alertOption = {
     backgroundColor: 'transparent',
     tooltip: { trigger: 'axis' },
-    legend: { top: 4, textStyle: chartTextStyle(), data: ['high', 'medium', 'low'] },
+    legend: { top: 4, textStyle: chartTextStyle(), data: ['高风险', '中风险', '低风险'] },
     grid: sharedGrid,
     xAxis: { type: 'category', data: dataOverview.alert_trend.labels, axisLabel: chartTextStyle(), axisLine: chartAxisLine() },
-    yAxis: { type: 'value', axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } } },
+    yAxis: { type: 'value', minInterval: 1, axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } } },
     series: [
-      { name: 'high', type: 'line', smooth: true, data: dataOverview.alert_trend.series.high || [], lineStyle: { color: '#f97316', width: 3 }, itemStyle: { color: '#f97316' } },
-      { name: 'medium', type: 'line', smooth: true, data: dataOverview.alert_trend.series.medium || [], lineStyle: { color: '#facc15', width: 2 }, itemStyle: { color: '#facc15' } },
-      { name: 'low', type: 'line', smooth: true, data: dataOverview.alert_trend.series.low || [], lineStyle: { color: '#22c55e', width: 2 }, itemStyle: { color: '#22c55e' } },
+      { name: '高风险', type: 'line', smooth: true, symbol: 'none', data: dataOverview.alert_trend.series.high || [], lineStyle: { color: '#E11D48', width: 3 } },
+      { name: '中风险', type: 'line', smooth: true, symbol: 'none', data: dataOverview.alert_trend.series.medium || [], lineStyle: { color: '#F59E0B', width: 2 } },
+      { name: '低风险', type: 'line', smooth: true, symbol: 'none', data: dataOverview.alert_trend.series.low || [], lineStyle: { color: '#10B981', width: 2 } },
     ],
   }
 
@@ -346,17 +369,17 @@ export function VisualizationConsole({
       left: 'center',
       bottom: 4,
       textStyle: chartTextStyle(),
-      inRange: { color: ['#05251f', '#0f766e', '#34d399'] },
+      inRange: { color: ['#EFF6FF', '#4D7CFF', '#0052FF'] },
     },
     series: [
       {
         type: 'heatmap',
         data: dataOverview.zone_health.flatMap((item, index) => [
-          [0, index, item.soil_moisture],
-          [1, index, item.deficit],
+          [0, index, Number(item.soil_moisture.toFixed(1))],
+          [1, index, Number(item.deficit.toFixed(1))],
           [2, index, item.alert_count],
         ]),
-        label: { show: true, color: '#ecfdf5' },
+        label: { show: true, color: '#0F172A' },
       },
     ],
   }
@@ -366,16 +389,16 @@ export function VisualizationConsole({
     tooltip: { trigger: 'axis' },
     grid: sharedGrid,
     xAxis: { type: 'category', data: mlPrediction?.points.map((item) => item.label) || [], axisLabel: chartTextStyle(), axisLine: chartAxisLine() },
-    yAxis: { type: 'value', min: 0, max: 100, axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.12)' } } },
+    yAxis: { type: 'value', min: 0, max: 100, axisLabel: chartTextStyle(), splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } } },
     series: [
       {
         name: '预测湿度',
         type: 'line',
         smooth: true,
-        data: mlPrediction?.points.map((item) => item.value) || [],
-        lineStyle: { width: 3, color: '#2dd4bf' },
-        itemStyle: { color: '#2dd4bf' },
-        areaStyle: { color: 'rgba(45, 212, 191, 0.16)' },
+        symbol: 'none',
+        data: mlPrediction?.points.map((item) => Number(item.value.toFixed(1))) || [],
+        lineStyle: { width: 3, color: '#0052FF' },
+        areaStyle: { color: 'rgba(0, 82, 255, 0.16)' },
       },
     ],
   }
@@ -384,13 +407,13 @@ export function VisualizationConsole({
     <div className="visualization-screen">
       <section className="visualization-hero">
         <div>
-          <p className="eyebrow">Visualization</p>
-          <h2>数据大屏</h2>
+          <SectionBadge label="Visualization" />
+          <h1>数据大屏</h1>
           <span>更新时间 {lastUpdated}</span>
         </div>
         <div className="visualization-hero-status">
-          <Waves size={18} />
-          <strong>{dashboard.irrigation?.status || 'standby'}</strong>
+          <Waves className="size-5 text-[#0052FF]" />
+          <strong>{labelFor(dashboard.irrigation?.status || 'idle', STATUS_LABELS)}</strong>
         </div>
       </section>
 
@@ -399,7 +422,7 @@ export function VisualizationConsole({
           const Icon = item.icon
           return (
             <div key={item.label} className={`visualization-kpi visualization-kpi-${item.tone}`}>
-              <Icon size={18} />
+              <Icon className="size-5 text-[#0052FF]" />
               <span>{item.label}</span>
               <strong>{item.value}</strong>
               <p>{item.detail}</p>
@@ -427,11 +450,11 @@ export function VisualizationConsole({
               <div className="visualization-ml-strip">
                 <div>
                   <span>当前</span>
-                  <strong>{formatNumber(mlPrediction.current, '%')}</strong>
+                  <strong>{formatNumber1(mlPrediction.current, '%')}</strong>
                 </div>
                 <div>
                   <span>24h</span>
-                  <strong>{formatNumber(mlPrediction.predicted, '%')}</strong>
+                  <strong>{formatNumber1(mlPrediction.predicted, '%')}</strong>
                 </div>
                 <div>
                   <span>置信度</span>
@@ -439,7 +462,7 @@ export function VisualizationConsole({
                 </div>
                 <div>
                   <span>样本</span>
-                  <strong>{formatNumber(mlPrediction.sampleCount)}</strong>
+                  <strong>{formatNumber1(mlPrediction.sampleCount)}</strong>
                 </div>
               </div>
               <p className="visualization-note">{mlPrediction.planLabel}</p>
@@ -461,19 +484,19 @@ export function VisualizationConsole({
                 <div className="visualization-ml-strip visualization-decision-strip">
                   <div>
                     <span>动作</span>
-                    <strong>{decisionModel.action}</strong>
+                    <strong>{labelFor(decisionModel.action, ACTION_LABELS)}</strong>
                   </div>
                   <div>
                     <span>时长</span>
-                    <strong>{formatNumber(decisionModel.duration, ' 分钟')}</strong>
+                    <strong>{formatNumber1(decisionModel.duration, ' 分钟')}</strong>
                   </div>
                   <div>
                     <span>置信度</span>
-                    <strong>{formatNumber(decisionModel.confidence)}</strong>
+                    <strong>{formatNumber1(decisionModel.confidence)}</strong>
                   </div>
                   <div>
                     <span>样本</span>
-                    <strong>{formatNumber(decisionModel.sampleCount)}</strong>
+                    <strong>{formatNumber1(decisionModel.sampleCount)}</strong>
                   </div>
                 </div>
                 <p className="visualization-note">{decisionModel.planLabel}</p>

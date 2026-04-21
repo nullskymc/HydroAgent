@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge'
+import { SectionBadge } from '@/components/ui/section-badge'
 import { cn } from '@/lib/utils'
 
 export function PageHeader({
@@ -19,7 +20,7 @@ export function PageHeader({
   return (
     <header className={cn('page-header-block', compact && 'page-header-compact')}>
       <div className="page-header-copy">
-        <p className="eyebrow">{eyebrow}</p>
+        <SectionBadge label={eyebrow} />
         <h1>{title}</h1>
         {description ? <p className="page-description">{description}</p> : null}
         {meta?.length ? (

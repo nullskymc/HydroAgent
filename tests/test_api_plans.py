@@ -8,7 +8,7 @@ try:
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
 
-    from src.api import get_db as api_get_db, router as api_router
+    from src.api import _resolve_chat_mode, get_db as api_get_db, router as api_router
     from src.database.models import Base, get_db as model_get_db
     from src.routers.alert_router import router as alert_router
     from src.routers.analytics_router import router as analytics_router
@@ -168,6 +168,15 @@ class TestAdminApi(unittest.TestCase):
                 detail_response = self.client.get(f"/api/knowledge/documents/{document_id}", headers=self.headers)
                 self.assertEqual(detail_response.status_code, 200)
                 self.assertEqual(detail_response.json()["document"]["document_id"], document_id)
+
+    def test_chat_mode_uses_explicit_request_mode(self):
+        self.assertEqual(_resolve_chat_mode("advisor", "生成灌溉计划", {}), "advisor")
+        self.assertEqual(_resolve_chat_mode("planner", "为什么不能灌溉", {}), "planner")
+        self.assertEqual(_resolve_chat_mode("operator", "查看状态", {}), "operator")
+
+    def test_chat_mode_falls_back_to_inference_for_invalid_mode(self):
+        self.assertEqual(_resolve_chat_mode("auditor", "审计这次计划链路", {}), "auditor")
+        self.assertEqual(_resolve_chat_mode("invalid", "生成灌溉计划", {}), "planner")
 
 
 if __name__ == "__main__":

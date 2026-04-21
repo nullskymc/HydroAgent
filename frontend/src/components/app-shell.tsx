@@ -4,6 +4,7 @@ import { Activity, BarChart3, Bell, BookOpenText, Bot, Boxes, History, Radar, Se
 import { getSessionUser } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { LogoutButton } from '@/components/logout-button'
+import { SectionBadge } from '@/components/ui/section-badge'
 
 type NavGroup = 'primary' | 'secondary'
 
@@ -80,7 +81,7 @@ function ShellNav({
           return (
             <Link key={item.href} href={item.href} className={cn('shell-nav-link', active && 'is-active')}>
               <span className="shell-nav-link-main">
-                <Icon size={16} />
+                <Icon size={14} />
                 <span>{item.label}</span>
               </span>
             </Link>
@@ -106,8 +107,9 @@ function ShellSidebar({
     <aside className={cn('shell-sidebar', compact && 'shell-sidebar-compact')}>
       <div className="shell-sidebar-surface">
         <div className="shell-sidebar-brand">
+          <SectionBadge label="HydroAgent" />
           <BrandBlock compact={compact} />
-          <p className="shell-sidebar-note">围绕灌溉计划、执行审批和风险监控组织导航，避免头部信息拥挤。</p>
+          <p className="shell-sidebar-note">围绕灌溉计划、执行审批和风险监控组织导航。</p>
         </div>
 
         <div className="shell-sidebar-navstack">
@@ -146,7 +148,7 @@ export async function ChatShell({ children, currentPath }: { children: React.Rea
   return (
     <div className="chat-app-shell app-shell-layout">
       <ShellSidebar currentPath={currentPath} navigation={navigation} user={user} compact />
-      <main className="chat-app-main shell-page-panel">{children}</main>
+      <main className="chat-app-main shell-page-panel flex flex-1 flex-col min-h-0 overflow-hidden p-0 px-0 py-0">{children}</main>
     </div>
   )
 }

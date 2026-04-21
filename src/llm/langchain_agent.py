@@ -28,6 +28,14 @@ _ZONE_ID_PATTERN = re.compile(r"\bzone_[a-zA-Z0-9]+\b")
 _PLAN_ID_PATTERN = re.compile(r"\bplan_[a-zA-Z0-9]+\b")
 
 
+class HydroChatOpenAI(ChatOpenAI):
+    """ChatOpenAI variant that keeps tool message content OpenAI-compatible."""
+
+    async def _astream(self, messages: list[Any], *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        async for chunk in super()._astream(_sanitize_chat_messages(messages), *args, **kwargs):
+            yield chunk
+
+
 class HydroDeepAgent:
     """Official LangChain agent wrapper with MCP tools and SSE-friendly event conversion."""
 
@@ -53,7 +61,7 @@ class HydroDeepAgent:
         await persistence.initialize()
         self._checkpointer = persistence.async_saver
 
-        self._llm = ChatOpenAI(
+        self._llm = HydroChatOpenAI(
             model=config.MODEL_NAME,
             api_key=config.OPENAI_API_KEY,
             base_url=config.OPENAI_BASE_URL,
@@ -459,6 +467,51 @@ def _stringify_event_payload(payload: Any, limit: int = 240) -> str:
     else:
         text = str(payload)
     return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _sanitize_chat_messages(messages: list[Any]) -> list[Any]:
+    sanitized = []
+    for message in messages:
+        content = getattr(message, "content", None)
+        if isinstance(content, str) or content is None:
+            sanitized.append(message)
+            continue
+
+        replacement = _coerce_message_content_to_text(content)
+        copier = getattr(message, "model_copy", None)
+        if callable(copier):
+            sanitized.append(copier(update={"content": replacement}))
+            continue
+        legacy_copier = getattr(message, "copy", None)
+        if callable(legacy_copier):
+            sanitized.append(legacy_copier(update={"content": replacement}))
+            continue
+
+        message.content = replacement
+        sanitized.append(message)
+    return sanitized
+
+
+def _coerce_message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        text_blocks = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                text_blocks.append(item["text"])
+                continue
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                text_blocks.append(text)
+        if text_blocks and len(text_blocks) == len(content):
+            return "\n".join(text_blocks)
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:
+        return str(content)
 
 
 def _get_message_agent_name(message: Any, default: str | None = None) -> str | None:

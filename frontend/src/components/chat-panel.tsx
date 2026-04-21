@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useEffectEvent, useRef, useState, useTransition } from 'react'
-import { ArrowUp, Bot, ChevronDown, LoaderCircle, Trash2, Waves, Workflow, Wrench } from 'lucide-react'
+import { Bot, ChevronDown, Copy, LoaderCircle, RotateCcw, Send, Workflow, Wrench } from 'lucide-react'
 import {
   ChatMessage,
   ConversationDetail,
@@ -14,12 +14,11 @@ import {
   ToolTrace as PersistedToolTrace,
   WorkingMemory,
 } from '@/lib/types'
-import { cn, parseJsonSafe } from '@/lib/utils'
+import { cn, formatDateTime, parseJsonSafe } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { Badge, StatusDot } from '@/components/ui/badge'
-import { Textarea } from '@/components/ui/textarea'
-import { ChatSidebar } from '@/components/chat-sidebar'
+import { Badge } from '@/components/ui/badge'
 import { MessageRichText } from '@/components/message-rich-text'
+import { ChatSidebar } from '@/components/chat-sidebar'
 import { toPlanCardViewModel, toSuggestionCardViewModel, toToolProgressStep, toToolProgressViewModel } from '@/lib/presenters'
 
 type LocalMessage = ChatMessage & {
@@ -29,10 +28,18 @@ type LocalMessage = ChatMessage & {
   toolTrace?: ToolProgressViewModel | null
 }
 
+type ChatMode = 'advisor' | 'planner' | 'operator'
+
 const quickPrompts = [
   '为 soil moisture 最低的分区生成灌溉计划',
   '检查待审批计划并说明风险',
   '查看已批准计划是否可以执行',
+]
+
+const chatModeOptions: Array<{ value: ChatMode; label: string; description: string }> = [
+  { value: 'advisor', label: 'Advisor', description: '分析建议' },
+  { value: 'planner', label: 'Planner', description: '生成计划' },
+  { value: 'operator', label: 'Operator', description: '审批执行' },
 ]
 
 const phaseOrder = ['evidence', 'analysis', 'planning', 'approval', 'execution', 'audit'] as const
@@ -69,6 +76,7 @@ function createToolTraceMessage(): LocalMessage {
     role: 'tool',
     content: null,
     localId: createLocalId(),
+    created_at: new Date().toISOString(),
     toolTrace: {
       status: 'running',
       headline: '正在分析灌溉条件',
@@ -118,6 +126,7 @@ function eventToTraceEntry(event: StreamEvent): ToolProgressStepViewModel | null
 }
 
 function getMessageRoleLabel(message: LocalMessage) {
+  if (message.role === 'user') return '你'
   if (message.role === 'assistant') return 'HydroAgent'
   if (message.plan) return '计划回执'
   if (message.suggestion) return '建议回执'
@@ -125,11 +134,15 @@ function getMessageRoleLabel(message: LocalMessage) {
   return '工具回执'
 }
 
+function formatMessageTimestamp(value?: string | null) {
+  const text = formatDateTime(value)
+  return text === '--' ? '刚刚' : text.replace('/', '-')
+}
+
 function toLocalMessage(message: ChatMessage, index = 0): LocalMessage {
   const persistedTrace = message.tool_trace as PersistedToolTrace | null | undefined
   return {
     ...message,
-    // 首屏消息需要稳定 key，避免 SSR 和客户端因为随机 id 产生 hydration mismatch。
     localId: createStableMessageId(message, index),
     plan: message.plan ?? null,
     suggestion: message.suggestion ?? null,
@@ -142,6 +155,7 @@ function planMessage(plan: IrrigationPlan): LocalMessage {
     role: 'tool',
     content: null,
     localId: `plan-${plan.plan_id}`,
+    created_at: new Date().toISOString(),
     plan,
   }
 }
@@ -151,6 +165,7 @@ function suggestionMessage(suggestion: IrrigationSuggestion): LocalMessage {
     role: 'tool',
     content: null,
     localId: `suggestion-${suggestion.suggestion_id}`,
+    created_at: new Date().toISOString(),
     suggestion,
   }
 }
@@ -186,34 +201,11 @@ function shouldHideAssistantMessage(messages: LocalMessage[], index: number) {
 }
 
 function MessageAvatar({ message }: { message: LocalMessage }) {
-  if (message.role === 'user') {
-    return <div className="message-avatar message-avatar-user">你</div>
-  }
-  if (message.role === 'assistant') {
-    return <div className="message-avatar message-avatar-agent">H</div>
-  }
-  if (message.toolTrace) {
-    return (
-      <div className="message-avatar message-avatar-toolchain">
-        <Workflow size={13} />
-      </div>
-    )
-  }
-  if (message.plan) {
-    return (
-      <div className="message-avatar message-avatar-toolchain">
-        <Wrench size={13} />
-      </div>
-    )
-  }
-  if (message.suggestion) {
-    return (
-      <div className="message-avatar message-avatar-toolchain">
-        <Wrench size={13} />
-      </div>
-    )
-  }
-  return <div className="message-avatar message-avatar-toolchain">工</div>
+  if (message.role === 'user') return <>你</>
+  if (message.role === 'assistant') return <Bot size={12} />
+  if (message.toolTrace) return <Workflow size={12} />
+  if (message.plan || message.suggestion) return <Wrench size={12} />
+  return <>工</>
 }
 
 function ToolTraceCard({ trace }: { trace: ToolProgressViewModel }) {
@@ -233,55 +225,37 @@ function ToolTraceCard({ trace }: { trace: ToolProgressViewModel }) {
   }
 
   return (
-    <div className="tool-trace-card">
+    <div className="w-full pl-3 text-xs text-slate-500">
       <button
         type="button"
-        className="tool-trace-summary"
+        className="flex w-full items-start justify-between text-left focus:outline-none"
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
       >
-        <div className="tool-trace-summary-copy">
-          <div className="tool-trace-summary-head">
-            <span className={cn('tool-trace-spinner', isRunning && 'is-running')}>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className={cn(isRunning ? 'animate-spin text-blue-500' : 'text-slate-400')}>
               <LoaderCircle size={14} />
             </span>
-            <strong>{trace.headline}</strong>
-            <Badge tone={trace.status === 'error' ? 'danger' : isRunning ? 'warning' : 'success'}>
-              {trace.steps.length} 步
-            </Badge>
+            <strong className="text-slate-700 font-medium">{trace.headline}</strong>
+            <Badge className="h-4 px-1 py-0 text-[10px]">{trace.steps.length} 步</Badge>
           </div>
-          <p>{summary}</p>
+          <p className="text-[10px] text-slate-500">{summary}</p>
         </div>
-        <ChevronDown className={cn('tool-trace-chevron', expanded && 'is-open')} size={16} />
+        <ChevronDown className={cn('text-slate-400 transition-transform', expanded && 'rotate-180')} size={14} />
       </button>
 
       {expanded ? (
-        <div className="tool-trace-entries">
+        <div className="mt-3 flex flex-col gap-3">
           {sections.map((section) => (
-            <div key={section.key} className="tool-trace-section">
-              <div className="tool-trace-entry-head">
-                <span>{section.label}</span>
-                <Badge>{section.entries.length}</Badge>
-              </div>
-              {section.entries.map((entry, index) => (
-                <div key={entry.id} className="tool-trace-entry">
-                  <div className="tool-trace-entry-rail">
-                    <span className={cn('tool-trace-entry-dot', entry.tone && `is-${entry.tone}`)} />
-                    {index < section.entries.length - 1 ? <span className="tool-trace-entry-line" /> : null}
-                  </div>
-                  <div className="tool-trace-entry-copy">
-                    <div className="tool-trace-entry-head">
-                      <span>{entry.title}</span>
-                      <Badge tone={entry.tone}>{index + 1}</Badge>
-                    </div>
-                    <p>{entry.detail}</p>
-                    {entry.meta.length > 0 ? (
-                      <div className="audit-console-meta">
-                        {entry.meta.map((metaItem) => (
-                          <span key={`${entry.id}-${metaItem}`}>{metaItem}</span>
-                        ))}
-                      </div>
-                    ) : null}
+            <div key={section.key} className="flex flex-col gap-2">
+              <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{section.label}</div>
+              {section.entries.map((entry) => (
+                <div key={entry.id} className="flex gap-2 text-[10px] text-slate-600">
+                  <span className="text-slate-300 mt-0.5">•</span>
+                  <div className="flex-1">
+                    <span className="font-medium text-slate-700">{entry.title}</span>
+                    <p className="text-slate-500 mt-0.5">{entry.detail}</p>
                   </div>
                 </div>
               ))}
@@ -314,24 +288,20 @@ export function ChatPanel({
   const initialWorkingMemory = readWorkingMemory(initialActiveConversation)
   const [, setWorkingMemory] = useState<WorkingMemory | null>(initialWorkingMemory)
   const [input, setInput] = useState('')
+  const [chatMode, setChatMode] = useState<ChatMode>('planner')
   const [isPending, startTransition] = useTransition()
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<HTMLInputElement>(null)
   const initialPromptHandledRef = useRef(false)
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages])
-
-  useEffect(() => {
-    const node = composerRef.current
-    if (!node) return
-    node.style.height = '0px'
-    node.style.height = `${Math.min(Math.max(node.scrollHeight, 72), 220)}px`
-  }, [input])
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+    }
+  }, [messages, isStreaming])
 
   async function refreshConversations() {
     const refreshed = await fetch('/api/conversations')
@@ -366,12 +336,6 @@ export function ChatPanel({
     return loadConversation(conversation.session_id)
   }
 
-  function isRenderablePlan(plan: unknown): plan is IrrigationPlan {
-    if (!plan || typeof plan !== 'object') return false
-    const candidate = plan as Record<string, unknown>
-    return typeof candidate.plan_id === 'string' && candidate.plan_id.trim().length > 0
-  }
-
   async function deleteConversation(sessionId: string) {
     setError(null)
     setDeletingConversationId(sessionId)
@@ -398,6 +362,12 @@ export function ChatPanel({
     } finally {
       setDeletingConversationId(null)
     }
+  }
+
+  function isRenderablePlan(plan: unknown): plan is IrrigationPlan {
+    if (!plan || typeof plan !== 'object') return false
+    const candidate = plan as Record<string, unknown>
+    return typeof candidate.plan_id === 'string' && candidate.plan_id.trim().length > 0
   }
 
   function upsertPlan(plan: IrrigationPlan) {
@@ -480,7 +450,6 @@ export function ChatPanel({
     setInput('')
     setIsStreaming(true)
 
-    // 首页快捷入口需要强制新建对话，避免把临时问题发送到旧会话里。
     let conversationId = options?.forceNewConversation ? undefined : activeConversation?.conversation.session_id
     if (!conversationId) {
       const detail = await createConversation()
@@ -488,9 +457,10 @@ export function ChatPanel({
     }
     if (!conversationId) throw new Error('会话创建失败')
 
-    const userMessage: LocalMessage = { role: 'user', content: draft, localId: createLocalId() }
+    const now = new Date().toISOString()
+    const userMessage: LocalMessage = { role: 'user', content: draft, localId: createLocalId(), created_at: now }
     const toolTraceMessage = createToolTraceMessage()
-    const assistantMessage: LocalMessage = { role: 'assistant', content: '', localId: createLocalId() }
+    const assistantMessage: LocalMessage = { role: 'assistant', content: '', localId: createLocalId(), created_at: now }
     setMessages((current) => [...current, userMessage, toolTraceMessage, assistantMessage])
     let streamFailed = false
 
@@ -501,6 +471,7 @@ export function ChatPanel({
         body: JSON.stringify({
           conversation_id: conversationId,
           message: draft,
+          mode: chatMode,
         }),
       })
       if (!response.ok || !response.body) {
@@ -524,7 +495,6 @@ export function ChatPanel({
 
           const payload = parseJsonSafe<StreamEvent>(line.slice(6), { type: 'error', content: '流式数据解析失败' })
           if (payload.type === 'text') {
-            // 现在主链路只有一个 supervisor，仍然只接正式文本事件，避免工具输出混入答案。
             if (payload.agent_name && payload.agent_name !== 'hydro-supervisor') {
               continue
             }
@@ -588,7 +558,6 @@ export function ChatPanel({
       await submitMessage({ draft, forceNewConversation: startFreshConversation })
       return
     }
-
     setInput(draft)
     composerRef.current?.focus()
   })
@@ -602,78 +571,39 @@ export function ChatPanel({
 
   function renderPlan(plan: IrrigationPlan) {
     const view = toPlanCardViewModel(plan)
-
     return (
-      <div className="plan-card">
-        <div className="plan-card-head">
+      <div className="w-full border-l-2 border-slate-100 pl-3 text-xs">
+        <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <strong>{view.title}</strong>
-            <p className="inline-muted">{view.summary}</p>
+            <strong className="text-slate-800 text-sm block mb-0.5">{view.title}</strong>
+            <p className="text-slate-500">{view.summary}</p>
           </div>
-          <div className="chat-header-meta">
-            <Badge tone={view.actionTone}>{view.actionLabel}</Badge>
-            <Badge tone={view.riskTone}>{view.riskLabel}</Badge>
-            <Badge tone={view.statusTone}>{view.statusLabel}</Badge>
+          <div className="flex gap-1">
+            <Badge className="h-5 bg-white px-2 text-[10px]">{view.statusLabel}</Badge>
           </div>
         </div>
-        <div className="plan-reason-list">
-          {view.reasons.map((reason) => (
-            <div key={`${view.planId}-${reason}`} className="plan-reason-item">
-              <span className="plan-reason-dot" />
-              <p>{reason}</p>
-            </div>
-          ))}
-        </div>
-        <div className="plan-metric-grid">
-          {view.metrics.map((metric) => (
-            <div key={`${view.planId}-${metric.label}`} className="plan-metric">
-              <span>{metric.label}</span>
-              <strong className={metric.tone ? `tone-${metric.tone}` : ''}>{metric.value}</strong>
-            </div>
-          ))}
-        </div>
-        <div className="plan-evidence-grid">
-          {view.evidenceSections.map((section) => (
-            <div key={`${view.planId}-${section.title}`} className="plan-evidence-card">
-              <span>{section.title}</span>
-              <div className="plan-evidence-list">
-                {section.items.map((item) => (
-                  <div key={`${section.title}-${item.label}`} className="plan-evidence-item">
-                    <label>{item.label}</label>
-                    <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.value}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="plan-safety-panel">
-          <span>风险与约束</span>
-          <div className="plan-safety-list">
-            {view.safetyItems.map((item) => (
-              <div key={`${view.planId}-${item.label}-${item.detail}`} className="plan-safety-item">
-                <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.label}</strong>
-                <p>{item.detail}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="action-row">
+        <div className="flex gap-2">
           <Button
+            size="sm"
+            className="h-7 text-xs px-3 bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] text-white rounded-md"
             disabled={isPending || !view.canApprove}
             onClick={() => startTransition(async () => actOnPlan(plan.plan_id, 'approve'))}
           >
             批准
           </Button>
           <Button
+            size="sm"
             variant="secondary"
+            className="h-7 text-xs px-3 rounded-md border border-slate-200"
             disabled={isPending || !view.canReject}
             onClick={() => startTransition(async () => actOnPlan(plan.plan_id, 'reject'))}
           >
             拒绝
           </Button>
           <Button
-            variant="ghost"
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs px-3 rounded-md"
             disabled={isPending || !view.canExecute}
             onClick={() => startTransition(async () => actOnPlan(plan.plan_id, 'execute'))}
           >
@@ -686,78 +616,33 @@ export function ChatPanel({
 
   function renderSuggestion(suggestion: IrrigationSuggestion) {
     const view = toSuggestionCardViewModel(suggestion)
-
     return (
-      <div className="plan-card">
-        <div className="plan-card-head">
-          <div>
-            <strong>{view.title}</strong>
-            <p className="inline-muted">{view.summary}</p>
-          </div>
-          <div className="chat-header-meta">
-            <Badge tone={view.actionTone}>{view.actionLabel}</Badge>
-            <Badge tone={view.riskTone}>{view.riskLabel}</Badge>
-            <Badge>建议记录</Badge>
-          </div>
-        </div>
-        <div className="plan-reason-list">
-          {view.reasons.map((reason) => (
-            <div key={`${view.suggestionId}-${reason}`} className="plan-reason-item">
-              <span className="plan-reason-dot" />
-              <p>{reason}</p>
-            </div>
-          ))}
-        </div>
-        <div className="plan-evidence-grid">
-          {view.evidenceSections.map((section) => (
-            <div key={`${view.suggestionId}-${section.title}`} className="plan-evidence-card">
-              <span>{section.title}</span>
-              <div className="plan-evidence-list">
-                {section.items.map((item) => (
-                  <div key={`${section.title}-${item.label}`} className="plan-evidence-item">
-                    <label>{item.label}</label>
-                    <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.value}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="plan-safety-panel">
-          <span>风险与约束</span>
-          <div className="plan-safety-list">
-            {view.safetyItems.map((item) => (
-              <div key={`${view.suggestionId}-${item.label}-${item.detail}`} className="plan-safety-item">
-                <strong className={item.tone ? `tone-${item.tone}` : ''}>{item.label}</strong>
-                <p>{item.detail}</p>
-              </div>
-            ))}
-          </div>
+      <div className="w-full border-l-2 border-slate-100 pl-3 text-xs">
+        <div className="mb-2">
+          <strong className="text-slate-800 text-sm block mb-0.5">{view.title}</strong>
+          <p className="text-slate-500">{view.summary}</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="chat-workspace">
+    <div className="flex h-full min-h-0 w-full flex-1 bg-white">
       <ChatSidebar
         quickPrompts={quickPrompts}
         conversations={conversations}
         activeConversationId={activeConversation?.conversation.session_id}
         deletingConversationId={deletingConversationId}
         onCreateConversation={() => {
-          // 侧边栏新建入口仅触发会话创建，不承担其他状态更新。
           startTransition(async () => {
             await createConversation()
           })
         }}
         onSelectPrompt={(prompt) => {
-          // 快捷动作只回填输入框，避免误触后直接发送。
           setInput(prompt)
           composerRef.current?.focus()
         }}
         onSelectConversation={(sessionId) => {
-          // 会话切换统一交给加载函数，保持主面板状态来源单一。
           startTransition(async () => {
             await loadConversation(sessionId)
           })
@@ -769,116 +654,202 @@ export function ChatPanel({
         }}
       />
 
-      <section className="chat-canvas">
-        <div className="chat-thread-bar">
-          <div className="chat-header-copy">
-            <p className="eyebrow">Supervisor Thread</p>
-            <div className="chat-header-main">
-              <h2>{activeConversation?.conversation.title || '新对话'}</h2>
-              <div className="chat-header-meta">
-                <Badge><StatusDot tone="success" /> 流式</Badge>
-                <Badge><Workflow size={12} /> Direct Tools</Badge>
-                <Badge><Waves size={12} /> Plan Timeline</Badge>
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-white">
+        <div className="flex-1 min-h-0 overflow-y-auto" ref={scrollRef}>
+        <div
+          className={cn(
+            'mx-auto w-full max-w-[1360px] px-5 py-8 sm:px-8 lg:px-10',
+            messages.length === 0 ? 'flex h-full flex-col' : 'flex min-h-full flex-col justify-end',
+          )}
+        >
+          {messages.length === 0 ? (
+            <div className="mx-auto flex max-w-xl flex-col items-center justify-center pt-20 text-center">
+              <div className="mb-5 flex size-10 items-center justify-center rounded-full bg-[#0052FF] text-white">
+                <Bot size={18} />
+              </div>
+              <h3 className="m-0 text-base font-semibold text-slate-900">有什么需要 HydroAgent 分析？</h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-500">
+                可以询问天气、分区状态、灌溉计划、审批风险或执行结果。
+              </p>
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {quickPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    className="rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600 transition hover:bg-slate-200 hover:text-slate-900"
+                    onClick={() => {
+                      setInput(prompt)
+                      composerRef.current?.focus()
+                    }}
+                  >
+                    {prompt}
+                  </button>
+                ))}
               </div>
             </div>
-            <p className="inline-muted">
-              HydroAgent 会在对话中生成计划、请求审批并回写执行结果。
-            </p>
-          </div>
-          {activeConversation ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="chat-delete-button"
-              onClick={() =>
-                startTransition(async () => {
-                  await deleteConversation(activeConversation.conversation.session_id)
-                })
-              }
-            >
-              <Trash2 size={16} />
-            </Button>
-          ) : null}
-        </div>
-
-        <div className="chat-stream" ref={scrollRef}>
-          <div className={cn('chat-stream-inner', messages.length === 0 && 'chat-stream-inner-empty')}>
-            {messages.length === 0 ? (
-              <div className="empty-state chat-empty-state chat-empty-state-rich">
-                <Bot size={30} />
-                <h3>从一个问题开始</h3>
-                <p>例如：检查当前土壤湿度，判断是否需要生成灌溉计划。</p>
-              </div>
-            ) : (
-              messages.map((message, index) => {
+          ) : (
+            <div className="flex flex-col gap-8">
+              {messages.map((message, index) => {
                 const hideAssistantMessage = shouldHideAssistantMessage(messages, index)
                 if (hideAssistantMessage && !message.plan && !message.suggestion && !message.toolTrace) {
                   return null
                 }
 
+                const isUser = message.role === 'user'
+                const isPlainAssistant = message.role === 'assistant' && !message.plan && !message.suggestion && !message.toolTrace
+                const previousUserMessage = messages
+                  .slice(0, index)
+                  .reverse()
+                  .find((item) => item.role === 'user' && item.content?.trim())
+
+                if (isUser) {
+                  return (
+                    <article key={message.localId} className="flex justify-end">
+                      <div className="max-w-[76%] rounded-2xl bg-slate-100 px-4 py-2.5 text-base leading-7 text-slate-900">
+                        <p className="m-0 whitespace-pre-wrap">{message.content}</p>
+                      </div>
+                    </article>
+                  )
+                }
+
                 return (
-                  <article
-                    key={message.localId}
-                    className={cn(
-                      'message-row',
-                      `role-${message.role}`,
-                      message.toolTrace && 'message-card-tooltrace',
-                      message.plan && 'message-card-plan',
-                      message.suggestion && 'message-card-plan',
-                    )}
-                  >
-                    <MessageAvatar message={message} />
-                    <div className="message-body">
-                      {message.role !== 'user' ? (
-                        <span className="message-role">{getMessageRoleLabel(message)}</span>
-                      ) : null}
-                      {message.plan ? renderPlan(message.plan) : null}
-                      {message.suggestion ? renderSuggestion(message.suggestion) : null}
-                      {message.toolTrace ? <ToolTraceCard trace={message.toolTrace} /> : null}
-                      {!message.plan && !message.suggestion && !hideAssistantMessage && message.content ? (
-                        <div className={cn('message-content', message.role === 'assistant' && 'markdown-content')}>
-                          {message.role === 'user' ? <p>{message.content}</p> : <MessageRichText content={message.content} />}
+                  <article key={message.localId} className="flex items-start gap-3">
+                    <div
+                      className={cn(
+                        'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
+                        message.role === 'assistant' ? 'bg-[#0052FF] text-white' : 'bg-slate-100 text-slate-500',
+                      )}
+                    >
+                      <MessageAvatar message={message} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-slate-400">
+                        <span>{getMessageRoleLabel(message)}</span>
+                        <time dateTime={message.created_at || undefined}>{formatMessageTimestamp(message.created_at)}</time>
+                      </div>
+
+                      <div className="min-w-0 text-base leading-7 text-slate-900">
+                        {message.plan ? renderPlan(message.plan) : null}
+                        {message.suggestion ? renderSuggestion(message.suggestion) : null}
+                        {message.toolTrace ? <ToolTraceCard trace={message.toolTrace} /> : null}
+                        {!message.plan && !message.suggestion && !hideAssistantMessage && message.content ? (
+                          <div className="message-rich-text-canvas">
+                            <MessageRichText content={message.content} />
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {isPlainAssistant && message.content ? (
+                        <div className="mt-3 flex items-center gap-1 text-slate-300">
+                          <button
+                            type="button"
+                            className="rounded-md p-1 transition hover:bg-slate-100 hover:text-slate-500"
+                            title="复制"
+                            aria-label="复制回复"
+                            onClick={() => void navigator.clipboard?.writeText(message.content || '')}
+                          >
+                            <Copy size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md p-1 transition hover:bg-slate-100 hover:text-slate-500"
+                            title="重新生成"
+                            aria-label="重新生成"
+                            disabled={!previousUserMessage?.content}
+                            onClick={() => {
+                              if (!previousUserMessage?.content) return
+                              void submitMessage({ draft: previousUserMessage.content })
+                            }}
+                          >
+                            <RotateCcw size={14} />
+                          </button>
                         </div>
                       ) : null}
                     </div>
                   </article>
                 )
-              })
-            )}
-          </div>
+              })}
+
+              {isStreaming ? (
+                <div className="flex items-center gap-3" aria-live="polite" aria-label="HydroAgent 正在生成">
+                  <div className="flex size-8 items-center justify-center rounded-full bg-[#0052FF] text-white">
+                    <Bot size={14} />
+                  </div>
+                  <span className="size-2 animate-pulse rounded-full bg-[#0052FF]" />
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
         </div>
 
-        {error ? <div className="error-banner">{error}</div> : null}
+        {error ? (
+          <div className="mx-auto w-full max-w-[1360px] px-5 sm:px-8 lg:px-10">
+            <div className="text-xs leading-5 text-rose-600">{error}</div>
+          </div>
+        ) : null}
 
-        <div className="composer-shell composer-shell-rich">
-          <div className="composer composer-rich">
-            <div className="composer-input-frame">
-              <Textarea
+        <div className="shrink-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-6 pb-8 px-4">
+          <div className="mx-auto w-full max-w-[1360px] px-1 sm:px-4 lg:px-6">
+            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm transition focus-within:border-slate-300 focus-within:shadow-md">
+              <select
+                aria-label="选择 HydroAgent 模式"
+                value={chatMode}
+                onChange={(event) => setChatMode(event.target.value as ChatMode)}
+                className="h-8 shrink-0 rounded-full bg-slate-100 px-2 text-[11px] font-semibold text-slate-700 outline-none md:hidden"
+              >
+                {chatModeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <div className="hidden shrink-0 items-center rounded-full bg-slate-100 p-0.5 md:inline-flex" aria-label="选择 HydroAgent 模式">
+                {chatModeOptions.map((option) => {
+                  const selected = chatMode === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={cn(
+                        'h-7 rounded-full px-2.5 text-[11px] font-semibold leading-none transition',
+                        selected ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900',
+                      )}
+                      title={option.description}
+                      aria-pressed={selected}
+                      onClick={() => setChatMode(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <input
                 ref={composerRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
+                  if (event.key === 'Enter') {
                     event.preventDefault()
                     void submitMessage()
                   }
                 }}
-                placeholder="输入分区灌溉问题、计划生成请求、审批指令或执行指令"
-                rows={1}
+                className="min-h-8 flex-1 bg-transparent px-1 text-base text-slate-900 outline-none ring-0 placeholder:text-slate-400"
+                placeholder="给 HydroAgent 发送消息..."
               />
               <Button
                 size="icon"
-                className="composer-send-button"
+                className="size-8 shrink-0 rounded-full bg-blue-500 p-1.5 text-white shadow-none transition hover:bg-blue-600 disabled:bg-slate-200"
+                aria-label="发送消息"
                 disabled={isPending || isStreaming || !input.trim()}
                 onClick={() => void submitMessage()}
               >
-                <ArrowUp size={16} />
+                <Send size={15} />
               </Button>
             </div>
           </div>
-          <p className="composer-footnote">支持计划生成、审批、执行回执与审计</p>
         </div>
-      </section>
+      </div>
     </div>
   )
 }

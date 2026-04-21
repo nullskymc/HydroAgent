@@ -1,4 +1,6 @@
 import { ReactNode } from 'react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { SectionBadge } from '@/components/ui/section-badge'
 
 export function ConsoleSectionHeader({
   eyebrow,
@@ -12,7 +14,7 @@ export function ConsoleSectionHeader({
   return (
     <header className="console-section-header">
       <div>
-        <p className="eyebrow">{eyebrow}</p>
+        <SectionBadge label={eyebrow} />
         <h2>{title}</h2>
       </div>
       {meta ? <div className="console-section-meta">{meta}</div> : null}
@@ -28,12 +30,5 @@ export function ConsoleEmptyState({
   title: string
   detail: string
 }) {
-  return (
-    <div className="console-empty-state" aria-live="polite">
-      <div className="console-empty-skeleton" />
-      <div className="console-empty-skeleton console-empty-skeleton-short" />
-      <strong>{title}</strong>
-      <p>{detail}</p>
-    </div>
-  )
+  return <EmptyState title={title} description={detail} />
 }

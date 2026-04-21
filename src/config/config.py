@@ -3,6 +3,7 @@
 """
 import os
 import tempfile
+import warnings
 import yaml
 from dotenv import load_dotenv
 
@@ -136,17 +137,25 @@ class Config:
         return value
 
     def _resolve_secret(self, *, env_key, yaml_key, encrypted_yaml_key, fallback=None):
-        encrypted_value = self._config_from_yaml.get(encrypted_yaml_key)
-        if encrypted_value:
-            return decrypt_config_secret(encrypted_value)
+        env_value = os.getenv(env_key)
+        if env_value:
+            return env_value
 
         plain_value = self._config_from_yaml.get(yaml_key)
         if plain_value:
             return plain_value
 
-        env_value = os.getenv(env_key)
-        if env_value:
-            return env_value
+        encrypted_value = self._config_from_yaml.get(encrypted_yaml_key)
+        if encrypted_value:
+            try:
+                return decrypt_config_secret(encrypted_value)
+            except ValueError as exc:
+                warnings.warn(
+                    f"{encrypted_yaml_key} 无法使用当前配置密钥解密，将忽略该加密值；"
+                    f"可设置 {env_key} 或 HYDRO_CONFIG_SECRET 恢复密钥。",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         return fallback
 

@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { labelFor } from '@/lib/labels'
 import { KnowledgeDocumentDetail, KnowledgeDocumentList } from '@/lib/types'
 import { cn, formatDateTime } from '@/lib/utils'
 
@@ -170,7 +171,7 @@ export function KnowledgeConsole({
                   </div>
                   <p>{item.source_uri || '未提供来源地址'}</p>
                   <div className="audit-record-badges">
-                    <Badge tone={item.status === 'ready' ? 'success' : 'warning'}>{item.status}</Badge>
+                    <Badge tone={item.status === 'ready' ? 'success' : 'warning'}>{labelFor(item.status)}</Badge>
                     <Badge>{item.chunk_count} chunks</Badge>
                   </div>
                   <div className="audit-record-meta">
@@ -221,7 +222,7 @@ export function KnowledgeConsole({
                 </div>
                 <div className="audit-record-badges">
                   <Badge tone={initialDetail.document.status === 'ready' ? 'success' : 'warning'}>
-                    {initialDetail.document.status}
+                    {labelFor(initialDetail.document.status)}
                   </Badge>
                   <Badge>{initialDetail.document.chunk_count} chunks</Badge>
                 </div>

@@ -1,4 +1,4 @@
-import { AppShell } from '@/components/app-shell'
+import { ChatShell } from '@/components/app-shell'
 import { ChatPanelShell } from '@/components/chat-panel-shell'
 import { getSessionToken, requirePermission } from '@/lib/auth'
 import { fetchBackendJson } from '@/lib/backend'
@@ -24,16 +24,14 @@ export default async function ChatPage({
     : null
 
   return (
-    <AppShell currentPath="/chat">
-      <div className="chat-page-frame">
-        <ChatPanelShell
-          initialConversations={conversationsPayload.conversations}
-          initialActiveConversation={initialActiveConversation}
-          initialPrompt={initialPrompt}
-          autoSendInitialPrompt={autoSendInitialPrompt}
-          startFreshConversation={startFresh}
-        />
-      </div>
-    </AppShell>
+    <ChatShell currentPath="/chat">
+      <ChatPanelShell
+        initialConversations={conversationsPayload.conversations}
+        initialActiveConversation={initialActiveConversation}
+        initialPrompt={initialPrompt}
+        autoSendInitialPrompt={autoSendInitialPrompt}
+        startFreshConversation={startFresh}
+      />
+    </ChatShell>
   )
 }

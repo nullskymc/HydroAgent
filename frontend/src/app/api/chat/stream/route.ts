@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const reader = response.body!.getReader()
+      const encoder = new TextEncoder()
       try {
         while (true) {
           const { done, value } = await reader.read()
@@ -34,7 +35,14 @@ export async function POST(request: NextRequest) {
         }
         controller.close()
       } catch (error) {
-        controller.error(error)
+        const detail = error instanceof Error ? error.message : '上游流式连接中断'
+        const errorEvent = JSON.stringify({
+          type: 'error',
+          content: `流式连接中断：${detail}`,
+        })
+        controller.enqueue(encoder.encode(`data: ${errorEvent}\n\n`))
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`))
+        controller.close()
       } finally {
         reader.releaseLock()
       }

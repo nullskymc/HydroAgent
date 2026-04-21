@@ -182,3 +182,5 @@ config.yaml
 *.db
 .codex/
 .hydro_workspace
+logs/
+output/playwright/

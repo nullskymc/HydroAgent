@@ -36,15 +36,15 @@ export function LoginForm() {
     <form className="login-form" onSubmit={handleSubmit}>
       <label className="login-field">
         <span>用户名</span>
-        <Input value={username} onChange={(event) => setUsername(event.target.value)} />
+        <Input value={username} autoComplete="username" onChange={(event) => setUsername(event.target.value)} />
       </label>
       <label className="login-field">
         <span>密码</span>
-        <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <Input type="password" value={password} autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
       </label>
       {error ? <div className="login-error">{error}</div> : null}
-      <Button type="submit" disabled={isPending}>
-        {isPending ? '登录中...' : '进入后台'}
+      <Button className="mt-1 h-10 w-full rounded-lg bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] text-sm font-semibold text-white shadow-sm shadow-blue-500/20 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/30" type="submit" disabled={isPending}>
+        {isPending ? 'Signing in...' : 'Enter Credentials'}
       </Button>
     </form>
   )

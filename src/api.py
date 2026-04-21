@@ -47,6 +47,8 @@ from src.services import (
 logger = logging.getLogger("hydroagent.api")
 router = APIRouter()
 
+CHAT_REQUEST_MODES = {"advisor", "planner", "operator"}
+
 INQUIRY_KEYWORDS = (
     "是否",
     "能否",
@@ -245,6 +247,13 @@ def _infer_mode_from_message(message: str, working_memory: dict[str, Any] | None
     if _contains_any(normalized, PLANNING_KEYWORDS):
         return "planner"
     return "advisor"
+
+
+def _resolve_chat_mode(requested_mode: str | None, message: str, working_memory: dict[str, Any] | None) -> str:
+    candidate = str(requested_mode or "").strip().lower()
+    if candidate in CHAT_REQUEST_MODES:
+        return candidate
+    return normalize_mode(_infer_mode_from_message(message, working_memory))
 
 
 def _infer_latest_plan_command(message: str) -> str | None:
@@ -483,7 +492,7 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
         raise HTTPException(status_code=404, detail="会话不存在")
 
     working_memory = await persistence.get_working_memory(req.conversation_id) or {}
-    resolved_mode = normalize_mode(_infer_mode_from_message(req.message, working_memory))
+    resolved_mode = _resolve_chat_mode(req.mode, req.message, working_memory)
     db = SessionLocal()
     try:
         farm_context = list_farm_context(db)
@@ -493,7 +502,7 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
     skill_context = get_skill_runtime().resolve_for_chat(
         mode=resolved_mode,
         message=req.message,
-        explicit_skill_ids=[],
+        explicit_skill_ids=req.skill_ids or [],
         working_memory=working_memory,
         farm_context=farm_context,
     )
@@ -501,17 +510,17 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
     async def generate():
         from src.llm.langchain_agent import get_hydro_agent
 
-        agent = get_hydro_agent()
-        if not agent._initialized:
-            yield f"data: {json.dumps({'type': 'text', 'content': '正在初始化 AI 引擎...'})}\n\n"
-            await agent.initialize()
-
         assistant_preview_parts: list[str] = []
         trace_id = f"trace_{uuid.uuid4().hex[:12]}"
         step_index = 0
         collected_events: list[dict[str, Any]] = []
 
         try:
+            agent = get_hydro_agent()
+            if not agent._initialized:
+                yield f"data: {json.dumps({'type': 'text', 'content': '正在初始化 AI 引擎...'})}\n\n"
+                await agent.initialize()
+
             if direct_plan_reply:
                 if isinstance(direct_plan_reply.get("plan"), dict):
                     plan_event = {

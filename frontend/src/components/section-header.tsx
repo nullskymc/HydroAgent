@@ -1,3 +1,5 @@
+import { SectionBadge } from '@/components/ui/section-badge'
+
 export function SectionHeader({
   title,
   description,
@@ -10,7 +12,7 @@ export function SectionHeader({
   return (
     <div className="section-header">
       <div className="section-header-copy">
-        <p className="eyebrow">数据层</p>
+        <SectionBadge label="Data Layer" />
         <h2>{title}</h2>
         <p className="page-description">{description}</p>
       </div>

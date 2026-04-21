@@ -4,10 +4,10 @@ import { cn } from '@/lib/utils'
 type BadgeTone = 'default' | 'success' | 'warning' | 'danger'
 
 const toneClasses: Record<BadgeTone, string> = {
-  default: 'ui-badge',
-  success: 'ui-badge ui-badge-success',
-  warning: 'ui-badge ui-badge-warning',
-  danger: 'ui-badge ui-badge-danger',
+  default: 'border-slate-200 bg-slate-50 text-slate-600',
+  success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  warning: 'border-amber-200 bg-amber-50 text-amber-700',
+  danger: 'border-rose-200 bg-rose-50 text-rose-700',
 }
 
 export function Badge({
@@ -15,9 +15,24 @@ export function Badge({
   tone = 'default',
   ...props
 }: HTMLAttributes<HTMLSpanElement> & { tone?: BadgeTone }) {
-  return <span className={cn(toneClasses[tone], className)} {...props} />
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs font-semibold uppercase tracking-widest',
+        toneClasses[tone],
+        className,
+      )}
+      {...props}
+    />
+  )
 }
 
 export function StatusDot({ tone = 'default' }: { tone?: BadgeTone }) {
-  return <span className={cn('status-dot', tone !== 'default' && `status-dot-${tone}`)} />
+  const dotClasses: Record<BadgeTone, string> = {
+    default: 'bg-slate-300',
+    success: 'bg-emerald-500',
+    warning: 'bg-amber-500',
+    danger: 'bg-rose-500',
+  }
+  return <span className={cn('inline-block size-2 rounded-full', dotClasses[tone])} />
 }

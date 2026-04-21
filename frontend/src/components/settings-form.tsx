@@ -26,6 +26,18 @@ function formatSecretStatusLabel(configured?: boolean, maskedValue?: string | nu
   return maskedValue || '已配置'
 }
 
+const compactInputClass =
+  'h-9 max-w-md rounded-md border-slate-200 bg-slate-50 shadow-none focus-visible:ring-2 focus-visible:ring-blue-500/20'
+const compactNumberInputClass =
+  'h-8 w-24 rounded-md border-slate-200 bg-slate-50 px-2 text-sm shadow-none focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-[#0052FF]/20'
+const compactTextareaClass =
+  'min-h-44 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm shadow-none ring-0 transition-all focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-[#0052FF]/20'
+const primaryActionClass =
+  'h-9 rounded-md bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] px-4 text-white shadow-sm transition-transform hover:-translate-y-0.5'
+const secondaryActionClass =
+  'h-9 rounded-md border border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50 hover:shadow-none hover:translate-y-0'
+const checkboxClass = 'size-4 rounded border-slate-300 text-[#0052FF] focus:ring-2 focus:ring-blue-500/20'
+
 function SettingsSection({
   id,
   title,
@@ -38,14 +50,12 @@ function SettingsSection({
   children: ReactNode
 }) {
   return (
-    <section id={id} className="settings-panel">
-      <header className="settings-panel-header">
-        <div className="settings-panel-heading">
-          <h2>{title}</h2>
-          <p>{description}</p>
-        </div>
+    <section id={id} className="bg-white">
+      <header className="border-b border-slate-100 pb-5">
+        <h2 className="m-0 text-base font-semibold text-slate-950">{title}</h2>
+        <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">{description}</p>
       </header>
-      <div className="settings-panel-body">{children}</div>
+      <div>{children}</div>
     </section>
   )
 }
@@ -62,13 +72,13 @@ function SettingsItem({
   control: ReactNode
 }) {
   return (
-    <div className="settings-item">
-      <div className="settings-item-copy">
-        <strong>{label}</strong>
-        <p>{detail}</p>
-        <span className="settings-item-path">{path}</span>
+    <div className="grid grid-cols-1 gap-4 border-b border-slate-100 py-5 md:grid-cols-12 md:gap-6">
+      <div className="md:col-span-4">
+        <strong className="block text-sm font-medium text-slate-900">{label}</strong>
+        <p className="mt-1 text-xs leading-5 text-slate-500">{detail}</p>
+        <span className="mt-2 block font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">{path}</span>
       </div>
-      <div className="settings-item-control">{control}</div>
+      <div className="min-w-0 md:col-span-8">{control}</div>
     </div>
   )
 }
@@ -85,13 +95,15 @@ function ReadonlyItem({
   detail: string
 }) {
   return (
-    <div className="settings-item">
-      <div className="settings-item-copy">
-        <strong>{label}</strong>
-        <p>{detail}</p>
-        <span className="settings-item-path">{path}</span>
+    <div className="grid grid-cols-1 gap-4 border-b border-slate-100 py-5 md:grid-cols-12 md:gap-6">
+      <div className="md:col-span-4">
+        <strong className="block text-sm font-medium text-slate-900">{label}</strong>
+        <p className="mt-1 text-xs leading-5 text-slate-500">{detail}</p>
+        <span className="mt-2 block font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">{path}</span>
       </div>
-      <div className="settings-item-value">{value}</div>
+      <div className="min-w-0 md:col-span-8">
+        <div className="max-w-md truncate rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">{value}</div>
+      </div>
     </div>
   )
 }
@@ -115,6 +127,19 @@ function formatSkillSourceLabel(value?: string | null) {
   if (value === 'generated') return '系统包装'
   if (value === 'imported') return '外部导入'
   return '项目内置'
+}
+
+// 小型布局组件只负责视觉约束，业务状态仍留在 SettingsForm 中。
+function ControlStack({ children }: { children: ReactNode }) {
+  return <div className="flex min-w-0 max-w-md flex-col gap-2">{children}</div>
+}
+
+function InlineActions({ children }: { children: ReactNode }) {
+  return <div className="flex flex-wrap items-center gap-2">{children}</div>
+}
+
+function SwitchRow({ children }: { children: ReactNode }) {
+  return <label className="flex flex-wrap items-center gap-2 text-sm text-slate-600">{children}</label>
 }
 
 export function SettingsForm({
@@ -312,18 +337,19 @@ export function SettingsForm({
               path="model_name"
               detail="用于 LangChain 智能体主对话的模型名称。"
               control={
-                <div className="settings-control-stack">
+                <ControlStack>
                   <Input
+                    className={compactInputClass}
                     value={settings.model_name || ''}
                     onChange={(event) => update('model_name', event.target.value)}
                     placeholder="例如 gpt-4o"
                   />
-                  <div className="settings-inline-actions">
-                    <Button variant="secondary" size="sm" onClick={() => setModelDrawerTarget('chat')}>
+                  <InlineActions>
+                    <Button className={secondaryActionClass} variant="secondary" onClick={() => setModelDrawerTarget('chat')}>
                       从模型列表选择
                     </Button>
-                  </div>
-                </div>
+                  </InlineActions>
+                </ControlStack>
               }
             />
             <SettingsItem
@@ -332,6 +358,7 @@ export function SettingsForm({
               detail="用于 Chat 与 Embeddings 的 OpenAI 兼容 API 地址。"
               control={
                 <Input
+                  className={compactInputClass}
                   value={settings.openai_base_url || ''}
                   onChange={(event) => update('openai_base_url', event.target.value)}
                   placeholder="例如 https://api.openai.com/v1"
@@ -350,6 +377,7 @@ export function SettingsForm({
               detail="留空表示不修改；保存时仅单向写入后端加密配置。"
               control={
                 <Input
+                  className={compactInputClass}
                   type="password"
                   value={openAiApiKeyInput}
                   onChange={(event) => setOpenAiApiKeyInput(event.target.value)}
@@ -363,6 +391,7 @@ export function SettingsForm({
               detail="数据库中的全局默认采集周期，影响自动检查与采样节奏。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.collection_interval_minutes ?? ''}
                   onChange={(event) => update('collection_interval_minutes', Number(event.target.value))}
@@ -380,18 +409,19 @@ export function SettingsForm({
               path="embedding_model_name"
               detail="用于知识库切片向量化与语义检索。"
               control={
-                <div className="settings-control-stack">
+                <ControlStack>
                   <Input
+                    className={compactInputClass}
                     value={settings.embedding_model_name || ''}
                     onChange={(event) => update('embedding_model_name', event.target.value)}
                     placeholder="例如 text-embedding-3-small"
                   />
-                  <div className="settings-inline-actions">
-                    <Button variant="secondary" size="sm" onClick={() => setModelDrawerTarget('embedding')}>
+                  <InlineActions>
+                    <Button className={secondaryActionClass} variant="secondary" onClick={() => setModelDrawerTarget('embedding')}>
                       从模型列表选择
                     </Button>
-                  </div>
-                </div>
+                  </InlineActions>
+                </ControlStack>
               }
             />
             <ReadonlyItem
@@ -406,6 +436,7 @@ export function SettingsForm({
               detail="留空表示继续沿用当前配置；保存时只写入密文。"
               control={
                 <Input
+                  className={compactInputClass}
                   type="password"
                   value={embeddingApiKeyInput}
                   onChange={(event) => setEmbeddingApiKeyInput(event.target.value)}
@@ -419,6 +450,7 @@ export function SettingsForm({
               detail="聊天检索工具默认返回的知识片段数量。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.knowledge_top_k ?? ''}
                   onChange={(event) => update('knowledge_top_k', Number(event.target.value))}
@@ -432,6 +464,7 @@ export function SettingsForm({
               detail="单个知识切片的字符上限。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.knowledge_chunk_size ?? ''}
                   onChange={(event) => update('knowledge_chunk_size', Number(event.target.value))}
@@ -445,6 +478,7 @@ export function SettingsForm({
               detail="相邻知识切片之间保留的重叠字符数。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.knowledge_chunk_overlap ?? ''}
                   onChange={(event) => update('knowledge_chunk_overlap', Number(event.target.value))}
@@ -463,6 +497,7 @@ export function SettingsForm({
               detail="创建新分区时预填的土壤湿度阈值；现有分区继续使用各自数据库值。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.soil_moisture_threshold}
                   onChange={(event) => update('soil_moisture_threshold', Number(event.target.value))}
@@ -475,6 +510,7 @@ export function SettingsForm({
               detail="创建新分区时预填的默认时长；不会批量覆盖已有分区。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.default_duration_minutes}
                   onChange={(event) => update('default_duration_minutes', Number(event.target.value))}
@@ -492,6 +528,7 @@ export function SettingsForm({
               detail="低于该值时，全局告警规则会提升风险等级。"
               control={
                 <Input
+                  className={compactNumberInputClass}
                   type="number"
                   value={settings.alarm_threshold}
                   onChange={(event) => update('alarm_threshold', Number(event.target.value))}
@@ -503,15 +540,15 @@ export function SettingsForm({
               path="system_settings.alarm_enabled"
               detail="控制是否启用全局低湿度报警链路。"
               control={
-                <label className="settings-switch-row">
+                <SwitchRow>
                   <input
-                    className="ui-checkbox settings-switch-checkbox"
+                    className={checkboxClass}
                     type="checkbox"
                     checked={settings.alarm_enabled}
                     onChange={(event) => update('alarm_enabled', event.target.checked)}
                   />
                   <span>{settings.alarm_enabled ? '已启用' : '已关闭'}</span>
-                </label>
+                </SwitchRow>
               }
             />
           </SettingsSection>
@@ -537,55 +574,60 @@ export function SettingsForm({
         return (
           <>
             <SettingsSection id="skills-installed" title="已安装 Skills" description="统一查看项目内置、外部导入和系统预置包装的 skill。">
-              <div className="skills-installed-grid">
-                <div className="skills-installed-list">
-                  {skills.map((skill) => (
-                    <button
-                      key={skill.id}
-                      type="button"
-                      className={cn('skills-installed-card', selectedSkill?.id === skill.id && 'is-active')}
-                      onClick={() => loadSkillDetail(skill.id)}
-                    >
-                      <div className="skills-installed-head">
-                        <strong>{skill.name}</strong>
-                        <Badge tone={skill.source_type === 'generated' ? 'warning' : skill.source_type === 'imported' ? 'success' : 'default'}>
-                          {formatSkillSourceLabel(skill.source_type)}
-                        </Badge>
-                      </div>
-                      <p>{skill.description}</p>
-                      <div className="skills-installed-meta">
-                        <span>{skill.id}</span>
-                        <span>{skill.tool_bundle?.length || skill.tool_allowlist?.length || 0} tools</span>
-                        <span>{skill.workflow_phases?.join(' / ') || 'analysis'}</span>
-                      </div>
-                    </button>
-                  ))}
+              <div className="grid gap-6 border-b border-slate-100 py-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                <div className="max-h-[520px] overflow-y-auto pr-1">
+                  <div className="divide-y divide-slate-100">
+                    {skills.map((skill) => (
+                      <button
+                        key={skill.id}
+                        type="button"
+                        className={cn(
+                          'block w-full px-3 py-3 text-left transition hover:bg-slate-50',
+                          selectedSkill?.id === skill.id && 'rounded-md bg-blue-50 text-[#0052FF] hover:bg-blue-50',
+                        )}
+                        onClick={() => loadSkillDetail(skill.id)}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <strong className="text-sm font-medium text-slate-950">{skill.name}</strong>
+                          <Badge tone={skill.source_type === 'generated' ? 'warning' : skill.source_type === 'imported' ? 'success' : 'default'}>
+                            {formatSkillSourceLabel(skill.source_type)}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{skill.description}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">
+                          <span>{skill.id}</span>
+                          <span>{skill.tool_bundle?.length || skill.tool_allowlist?.length || 0} tools</span>
+                          <span>{skill.workflow_phases?.join(' / ') || 'analysis'}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="skills-detail-card">
+                <div className="min-w-0 bg-white">
                   {selectedSkill ? (
-                    <>
-                      <div className="skills-detail-head">
-                        <div>
-                          <strong>{selectedSkill.name}</strong>
-                          <p>{selectedSkill.description}</p>
+                    <div className="flex min-w-0 flex-col gap-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                        <div className="min-w-0">
+                          <strong className="text-sm font-semibold text-slate-950">{selectedSkill.name}</strong>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">{selectedSkill.description}</p>
                         </div>
                         <Badge>{formatSkillSourceLabel(selectedSkill.source_type)}</Badge>
                       </div>
-                      <div className="skills-detail-meta">
+                      <div className="flex flex-wrap items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">
                         <span>ID: {selectedSkill.id}</span>
                         <span>模式: {(selectedSkill.mode_allowlist || []).join(' / ') || '--'}</span>
                         <span>工具数: {selectedSkill.tool_bundle?.length || selectedSkill.tool_allowlist?.length || 0}</span>
                       </div>
                       {selectedSkill.source_url ? (
-                        <a className="settings-link" href={selectedSkill.source_url} target="_blank" rel="noreferrer">
+                        <a className="break-all text-xs font-medium text-[#0052FF] hover:underline" href={selectedSkill.source_url} target="_blank" rel="noreferrer">
                           {selectedSkill.source_url}
                         </a>
                       ) : null}
-                      <Textarea readOnly rows={8} value={selectedSkill.instruction_append || '暂无详细指令'} />
-                      <div className="settings-inline-actions">
+                      <Textarea className={compactTextareaClass} readOnly rows={8} value={selectedSkill.instruction_append || '暂无详细指令'} />
+                      <InlineActions>
                         {selectedSkill.source_type === 'imported' && selectedSkill.source_url ? (
                           <Button
-                            size="sm"
+                            className={secondaryActionClass}
                             variant="secondary"
                             disabled={isPending}
                             onClick={() => submitSkillImport(selectedSkill.source_url || '', true)}
@@ -595,6 +637,7 @@ export function SettingsForm({
                         ) : null}
                         {selectedSkill.source_type === 'imported' ? (
                           <Button
+                            className="h-8 rounded-md px-3 text-xs text-slate-600 hover:bg-slate-100"
                             size="sm"
                             variant="ghost"
                             disabled={isPending}
@@ -603,10 +646,10 @@ export function SettingsForm({
                             删除
                           </Button>
                         ) : null}
-                      </div>
-                    </>
+                      </InlineActions>
+                    </div>
                   ) : (
-                    <div className="settings-item-value">当前没有已安装 skill。</div>
+                    <div className="rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">当前没有已安装 skill。</div>
                   )}
                 </div>
               </div>
@@ -618,23 +661,28 @@ export function SettingsForm({
                 path="skills.import.url"
                 detail="支持 raw.githubusercontent.com、gist.githubusercontent.com，以及配置的白名单域名。GitHub blob 链接会自动转换成 raw。"
                 control={
-                  <div className="settings-control-stack">
-                    <Input value={importUrl} onChange={(event) => setImportUrl(event.target.value)} placeholder="https://raw.githubusercontent.com/..." />
-                    <label className="settings-switch-row">
+                  <ControlStack>
+                    <Input
+                      className={compactInputClass}
+                      value={importUrl}
+                      onChange={(event) => setImportUrl(event.target.value)}
+                      placeholder="https://raw.githubusercontent.com/..."
+                    />
+                    <SwitchRow>
                       <input
-                        className="ui-checkbox settings-switch-checkbox"
+                        className={checkboxClass}
                         type="checkbox"
                         checked={importOverwrite}
                         onChange={(event) => setImportOverwrite(event.target.checked)}
                       />
                       <span>{importOverwrite ? '允许覆盖已存在 imported/generated skill' : '默认禁止覆盖'}</span>
-                    </label>
-                    <div className="settings-inline-actions">
-                      <Button disabled={isPending || !importUrl.trim()} onClick={() => submitSkillImport()}>
+                    </SwitchRow>
+                    <InlineActions>
+                      <Button className={primaryActionClass} disabled={isPending || !importUrl.trim()} onClick={() => submitSkillImport()}>
                         导入 Skill
                       </Button>
-                    </div>
-                  </div>
+                    </InlineActions>
+                  </ControlStack>
                 }
               />
             </SettingsSection>
@@ -646,7 +694,7 @@ export function SettingsForm({
   }
 
   return (
-    <div className="settings-workspace">
+    <div className="flex min-h-full w-full flex-col gap-6 bg-white lg:flex-row">
       <ModelPickerDrawer
         open={modelDrawerTarget !== null}
         title={modelDrawerTarget === 'embedding' ? '选择 Embeddings 模型' : '选择聊天模型'}
@@ -654,52 +702,64 @@ export function SettingsForm({
         onClose={() => setModelDrawerTarget(null)}
         onSelect={applyModelSelection}
       />
-      <aside className="settings-sidebar">
-        <div className="settings-sidebar-header">
-          <p className="eyebrow">系统设置</p>
-          <h1>系统设置</h1>
-          <span title={settings.config_source || 'config.yaml'}>{configSourceLabel}</span>
+      <aside className="w-full shrink-0 bg-white lg:sticky lg:top-4 lg:w-56 lg:self-start">
+        <div className="mb-5">
+          <p className="m-0 font-mono text-[0.64rem] font-semibold uppercase tracking-widest text-slate-400">系统设置</p>
+          <h1 className="mt-2 text-lg font-semibold text-slate-950">系统设置</h1>
+          <span className="mt-1 block truncate font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400" title={settings.config_source || 'config.yaml'}>
+            {configSourceLabel}
+          </span>
         </div>
-        <nav className="settings-sidebar-nav" aria-label="设置分组">
+        <nav className="flex flex-row gap-1 overflow-x-auto lg:flex-col lg:overflow-visible" aria-label="设置分组">
           {navItems.map((item) => (
             <a
               key={item.id}
               href={`/settings?section=${item.id}`}
-              className={cn('settings-sidebar-link', activeSection === item.id && 'is-active')}
+              className={cn(
+                'whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-50',
+                activeSection === item.id && 'bg-blue-50 font-medium text-blue-600',
+              )}
               aria-current={activeSection === item.id ? 'true' : undefined}
             >
               {item.label}
             </a>
           ))}
         </nav>
-        <div className="settings-sidebar-note">
+        <div className="mt-5 hidden text-xs leading-5 text-slate-500 lg:block">
           <p>模型配置写 YAML，业务默认值写数据库。</p>
         </div>
       </aside>
 
-      <div className="settings-main">
-        <header className="settings-main-header">
-          <div className="settings-main-copy">
-            <p className="eyebrow">系统偏好</p>
-            <h2>{currentSection.label}</h2>
-            <p>当前仅显示所选分类；模型配置写入 YAML，运行期业务默认值写入数据库。</p>
+      <div className="min-w-0 max-w-4xl flex-1 bg-white px-4 md:px-8">
+        <header className="flex flex-col justify-between gap-3 border-b border-slate-100 pb-6 md:flex-row md:items-end">
+          <div>
+            <p className="m-0 font-mono text-[0.64rem] font-semibold uppercase tracking-widest text-slate-400">系统偏好</p>
+            <h2 className="mt-2 text-2xl font-semibold text-slate-950">{currentSection.label}</h2>
+            <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">当前仅显示所选分类；模型配置写入 YAML，运行期业务默认值写入数据库。</p>
           </div>
-          <span className="settings-main-source" title={settings.config_source || 'config.yaml'}>
+          <span
+            className="w-fit rounded-md bg-slate-50 px-3 py-2 font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-500"
+            title={settings.config_source || 'config.yaml'}
+          >
             {configSourceLabel}
           </span>
         </header>
 
-        <div key={activeSection} className="settings-section-stage">
+        <div key={activeSection} className="pt-6">
           {renderCurrentSection()}
         </div>
 
-        {activeSection === 'skills' && skillMessage ? <div className="settings-status-banner"><p>{skillMessage}</p></div> : null}
+        {activeSection === 'skills' && skillMessage ? (
+          <div className="mt-4 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            <p>{skillMessage}</p>
+          </div>
+        ) : null}
 
-        <div className="settings-savebar">
-          <Button className="settings-save-button" disabled={isPending} onClick={submit}>
+        <div className="sticky bottom-0 mt-6 flex flex-wrap items-center gap-3 border-t border-slate-100 bg-white/95 py-4 backdrop-blur">
+          <Button className={primaryActionClass} disabled={isPending} onClick={submit}>
             {isPending ? '保存中...' : '保存设置'}
           </Button>
-          {message ? <span className="settings-save-message">{message}</span> : null}
+          {message ? <span className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">{message}</span> : null}
         </div>
       </div>
     </div>
