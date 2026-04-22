@@ -47,6 +47,7 @@ OPEN_PLAN_STATUSES = ("pending_approval", "approved", "executing")
 RUNNING_PLAN_STATUSES = {"executing"}
 FINISHED_EXECUTION_STATUSES = {"running", "stopped", "completed", "executed"}
 AUTO_PLAN_DUPLICATE_WINDOW_MINUTES = 60
+MIN_MOISTURE_STOP_PROTECTION_SECONDS = 60
 _sensor_summary_cache: dict[str, tuple[dt.datetime, dict[str, Any]]] = {}
 _weather_summary_cache: dict[str, tuple[dt.datetime, dict[str, Any]]] = {}
 _cache_lock = Lock()
@@ -177,6 +178,16 @@ def get_open_plan_for_zone(db: Session, zone_id: str) -> IrrigationPlan | None:
 
 def list_plans(db: Session, limit: int = 20) -> list[IrrigationPlan]:
     return db.query(IrrigationPlan).order_by(IrrigationPlan.created_at.desc()).limit(limit).all()
+
+
+def list_open_plans(db: Session, limit: int = 20) -> list[IrrigationPlan]:
+    return (
+        db.query(IrrigationPlan)
+        .filter(IrrigationPlan.status.in_(OPEN_PLAN_STATUSES))
+        .order_by(IrrigationPlan.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 def get_zone_status(db: Session, zone_id: str) -> dict[str, Any]:
@@ -880,27 +891,62 @@ def _should_skip_auto_plan(db: Session, zone_id: str, plan_payload: dict[str, An
     return None
 
 
-def _running_stop_reason(db: Session, actuator: Actuator, *, now: dt.datetime) -> str | None:
-    latest_plan = (
+def _get_running_plan_for_actuator(db: Session, actuator: Actuator) -> IrrigationPlan | None:
+    return (
         db.query(IrrigationPlan)
         .filter(
             IrrigationPlan.actuator_id == actuator.actuator_id,
             or_(
                 IrrigationPlan.status.in_(RUNNING_PLAN_STATUSES),
-                IrrigationPlan.execution_status.in_(FINISHED_EXECUTION_STATUSES),
+                IrrigationPlan.execution_status == "running",
             ),
         )
         .order_by(IrrigationPlan.executed_at.desc())
         .first()
     )
-    if latest_plan and latest_plan.executed_at and latest_plan.recommended_duration_minutes:
-        elapsed_seconds = max(0.0, (now - latest_plan.executed_at).total_seconds())
+
+
+def _get_running_plan_for_zone(db: Session, zone_id: str) -> IrrigationPlan | None:
+    return (
+        db.query(IrrigationPlan)
+        .filter(
+            IrrigationPlan.zone_id == zone_id,
+            or_(
+                IrrigationPlan.status.in_(RUNNING_PLAN_STATUSES),
+                IrrigationPlan.execution_status == "running",
+            ),
+        )
+        .order_by(IrrigationPlan.executed_at.desc())
+        .first()
+    )
+
+
+def _elapsed_execution_seconds(plan: IrrigationPlan, *, now: dt.datetime) -> float:
+    if not plan.executed_at:
+        return 0.0
+    return max(0.0, (now - plan.executed_at).total_seconds())
+
+
+def _moisture_stop_protection_seconds(plan: IrrigationPlan) -> float:
+    duration_seconds = max(0, int(plan.recommended_duration_minutes or 0)) * 60
+    if duration_seconds <= 0:
+        return float(MIN_MOISTURE_STOP_PROTECTION_SECONDS)
+    return float(min(MIN_MOISTURE_STOP_PROTECTION_SECONDS, duration_seconds))
+
+
+def _running_stop_reason(db: Session, actuator: Actuator, *, now: dt.datetime) -> str | None:
+    latest_plan = _get_running_plan_for_actuator(db, actuator)
+    elapsed_seconds = _elapsed_execution_seconds(latest_plan, now=now) if latest_plan else 0.0
+    if latest_plan and latest_plan.recommended_duration_minutes:
         if elapsed_seconds >= latest_plan.recommended_duration_minutes * 60:
             return "planned_duration_elapsed"
 
     zone = actuator.zone
     if not zone:
         return None
+    if latest_plan and elapsed_seconds < _moisture_stop_protection_seconds(latest_plan):
+        return None
+
     evidence = collect_zone_evidence(db, zone)
     average = evidence.sensor_summary.get("average", {})
     moisture = float(average.get("soil_moisture", 0.0) or 0.0)
@@ -963,6 +1009,7 @@ def _collect_zone_sensor_summary(db: Session, zone: Zone) -> dict[str, Any]:
     for sensor_id in sensor_ids:
         try:
             data = DataCollectionModule([sensor_id]).get_data()
+            _stabilize_running_mock_reading(db, zone, sensor_id, data.get("data", {}))
             raw_reading = dict(data)
             raw_reading.setdefault("sensor_id", sensor_id)
             readings.append({"sensor_id": sensor_id, **data["data"]})
@@ -999,6 +1046,56 @@ def _collect_zone_sensor_summary(db: Session, zone: Zone) -> dict[str, Any]:
     _store_sensor_history(db, raw_readings)
     _write_cached_payload(_sensor_summary_cache, zone.zone_id, payload)
     return payload
+
+
+def _stabilize_running_mock_reading(db: Session, zone: Zone, sensor_id: str, reading: dict[str, Any]) -> None:
+    running_plan = _get_running_plan_for_zone(db, zone.zone_id)
+    if not running_plan:
+        return
+
+    threshold = _resolve_zone_threshold(db, zone)
+    base_moisture = _coerce_float(_plan_evidence_moisture(running_plan))
+    if base_moisture is None:
+        base_moisture = _coerce_float(_latest_sensor_moisture(db, sensor_id))
+    if base_moisture is None:
+        base_moisture = _coerce_float(reading.get("soil_moisture"))
+    if base_moisture is None:
+        return
+
+    base_moisture = min(max(0.0, base_moisture), max(0.0, threshold - 0.5))
+    elapsed_seconds = _elapsed_execution_seconds(running_plan, now=dt.datetime.utcnow())
+    protection_seconds = max(1.0, _moisture_stop_protection_seconds(running_plan))
+    progress = min(1.0, elapsed_seconds / protection_seconds)
+    target_moisture = threshold + 0.5
+    stable_moisture = base_moisture + (target_moisture - base_moisture) * progress
+    if progress < 1.0:
+        stable_moisture = min(stable_moisture, max(0.0, threshold - 0.1))
+
+    reading["soil_moisture"] = round(min(100.0, max(0.0, stable_moisture)), 2)
+
+
+def _plan_evidence_moisture(plan: IrrigationPlan) -> Any:
+    evidence = plan.evidence_summary if isinstance(plan.evidence_summary, dict) else {}
+    sensor_summary = evidence.get("sensor_summary") if isinstance(evidence.get("sensor_summary"), dict) else {}
+    average = sensor_summary.get("average") if isinstance(sensor_summary.get("average"), dict) else {}
+    return average.get("soil_moisture")
+
+
+def _latest_sensor_moisture(db: Session, sensor_id: str) -> Any:
+    latest = (
+        db.query(SensorData)
+        .filter(SensorData.sensor_id == sensor_id, SensorData.soil_moisture.isnot(None))
+        .order_by(SensorData.timestamp.desc())
+        .first()
+    )
+    return latest.soil_moisture if latest else None
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _store_sensor_history(db: Session, raw_readings: list[dict[str, Any]]) -> None:

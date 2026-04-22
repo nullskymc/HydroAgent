@@ -29,6 +29,8 @@ type GeneratePlanResponse = {
     proposed_action?: string
     risk_level?: string
     zone_name?: string | null
+    recommended_duration_minutes?: number
+    reasoning_summary?: string | null
   } | null
   reused_existing?: boolean
   suggestion_only?: boolean
@@ -189,6 +191,47 @@ function ZoneStatusList({ rows, loading }: { rows: ZoneView[]; loading: boolean 
   )
 }
 
+function GenerationResultNotice({ mutation }: { mutation: ReturnType<typeof useMutation<GeneratePlanResponse, Error, { zoneId: string; replace: boolean }>> }) {
+  if (mutation.isError) {
+    return (
+      <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">
+        <strong className="block font-semibold">生成失败</strong>
+        <span className="mt-1 block text-xs leading-5">{mutation.error.message}</span>
+      </div>
+    )
+  }
+
+  const result = mutation.data
+  if (!result) return null
+
+  if (result.plan) {
+    return (
+      <div className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+        <strong className="block font-semibold">{result.reused_existing ? '已复用已有活跃计划' : '已生成正式灌溉计划'}</strong>
+        <span className="mt-1 block text-xs leading-5">
+          {result.plan.zone_name || result.plan.zone_id || '未指定分区'} · {labelFor(result.plan.status)} · {formatNumber1(result.plan.recommended_duration_minutes, ' 分钟')}
+        </span>
+      </div>
+    )
+  }
+
+  if (result.suggestion) {
+    return (
+      <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <strong className="block font-semibold">已记录暂缓建议，未生成执行计划</strong>
+        <span className="mt-1 block text-xs leading-5">
+          {result.suggestion.zone_name || '当前分区'} · {labelFor(result.suggestion.proposed_action, ACTION_LABELS)} · {labelFor(result.suggestion.risk_level, RISK_LABELS)}
+        </span>
+        {result.suggestion.reasoning_summary ? (
+          <span className="mt-1 block max-h-10 overflow-hidden text-xs leading-5">{result.suggestion.reasoning_summary}</span>
+        ) : null}
+      </div>
+    )
+  }
+
+  return null
+}
+
 function PlanGenerationForm({
   zones,
   currentUser,
@@ -209,14 +252,6 @@ function PlanGenerationForm({
     if (!selectedZoneId || !canCreate) return
     mutation.mutate({ zoneId: selectedZoneId, replace })
   }
-
-  const resultText = mutation.data?.plan
-    ? mutation.data.reused_existing
-      ? `复用已有计划：${mutation.data.plan.zone_name || mutation.data.plan.zone_id}`
-      : `已生成计划：${mutation.data.plan.zone_name || mutation.data.plan.zone_id}`
-    : mutation.data?.suggestion
-      ? `已记录建议：${labelFor(mutation.data.suggestion.proposed_action, ACTION_LABELS)}`
-      : null
 
   return (
     <section className="rounded-lg bg-white p-4 shadow-sm">
@@ -271,8 +306,7 @@ function PlanGenerationForm({
       </form>
 
       {!canCreate ? <p className="m-0 mt-3 text-xs text-slate-500">当前账号没有生成灌溉计划权限。</p> : null}
-      {resultText ? <p className="m-0 mt-3 text-xs text-slate-500">{resultText}</p> : null}
-      {mutation.isError ? <p className="m-0 mt-3 text-xs text-red-700">{mutation.error.message}</p> : null}
+      <GenerationResultNotice mutation={mutation} />
     </section>
   )
 }
@@ -347,13 +381,13 @@ function ActivePlanList({
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <SectionBadge label="Active Plans" />
-          <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">执行中计划</h2>
+          <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">活跃计划</h2>
         </div>
         <InlineStatusDot active={loading} label={loading ? '同步中' : `${plans.length} 条`} />
       </div>
 
       {plans.length === 0 ? (
-        <CompactEmpty title="暂无执行中计划" description="当前没有待审批、已批准或正在执行的计划。" />
+        <CompactEmpty title="暂无活跃计划" description="当前没有待审批、已批准或正在执行的计划。" />
       ) : (
         <div className="overflow-hidden rounded-lg bg-slate-50">
           <div className="grid h-9 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 font-mono text-[0.62rem] font-semibold uppercase tracking-widest text-slate-500">
@@ -427,7 +461,10 @@ export function OperationsConsole({
     },
   })
 
-  const activePlans = useMemo(() => (historyQuery.data?.plans || []).filter(isActivePlan), [historyQuery.data?.plans])
+  const activePlans = useMemo(
+    () => (historyQuery.data?.active_plans || historyQuery.data?.plans || []).filter(isActivePlan),
+    [historyQuery.data?.active_plans, historyQuery.data?.plans],
+  )
   const zoneRows = useMemo(() => buildZoneRows(dashboardQuery.data, activePlans), [dashboardQuery.data, activePlans])
 
   return (

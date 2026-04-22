@@ -34,6 +34,7 @@ from src.services import (
     get_system_settings_snapshot,
     get_zone_status,
     list_farm_context,
+    list_open_plans,
     list_plans,
     list_zones,
     manual_override_control,
@@ -947,8 +948,14 @@ async def zone_status(zone_id: str, db: Session = Depends(get_db), _: User = Dep
 
 
 @router.get("/plans")
-async def plans(limit: int = 20, db: Session = Depends(get_db), _: User = Depends(require_permission("operations:view"))):
-    return {"plans": [plan.to_dict() for plan in list_plans(db, limit=limit)]}
+async def plans(
+    limit: int = 20,
+    active_only: bool = False,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("operations:view")),
+):
+    plan_rows = list_open_plans(db, limit=limit) if active_only else list_plans(db, limit=limit)
+    return {"plans": [plan.to_dict() for plan in plan_rows]}
 
 
 @router.post("/plans/generate")
