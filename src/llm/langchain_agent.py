@@ -1,362 +1,611 @@
 """
-HydroAgent LangChain Agent — Deep Agent + MCP Client 实现
-使用 LangChain + LangGraph 构建水利灌溉智能体
+HydroAgent 单执行内核 LangChain harness。
 """
-import asyncio
+from __future__ import annotations
+
+import inspect
+import json
 import logging
 import os
-import random
-import datetime
-import json
-from typing import AsyncIterator, Optional
+import re
+import sys
+import time
+from typing import Any, AsyncIterator, Optional
+
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
+
+from src.llm.agent_runtime import HydroAgentMode, build_system_prompt, resolve_phase
+from src.llm.persistence import get_hydro_persistence
+from src.llm.tool_argument_parser import ACTIVE_CONVERSATION_ID, ToolArgumentParserAgent, wrap_tool_registry
 
 logger = logging.getLogger("hydroagent.agent")
 
-# ============================================================
-#  水利专业系统提示词
-# ============================================================
-HYDRO_SYSTEM_PROMPT = """你是 HydroAgent，一个专业的水利灌溉智能决策助手。
-
-## 你的专业能力
-你可以通过工具完成以下水利管理任务：
-- **传感器查询**：获取土壤湿度、温度、光照、降雨数据
-- **天气分析**：查询实时天气和预报，评估灌溉时机
-- **灌溉控制**：启动/停止灌溉设备
-- **数据科学分析**：统计分析、异常检测、时序预测、相关性分析
-- **决策推荐**：综合多源数据，给出专业灌溉建议
-
-## 决策原则
-1. 土壤湿度 < 25% 紧急灌溉，25%-40% 建议灌溉，> 40% 暂缓
-2. 有降雨预报时，推迟灌溉
-3. 优先选择蒸发量低的时段（清晨 6-8 时）
-4. 每次建议前先用数据分析工具验证
-5. 执行灌溉控制前，主动确认用户意图
-
-## 回答要求
-- 用中文回答，引用具体数值
-- 工具调用后及时解读结果
-- 多轮对话中保持上下文连贯
-- 复杂决策分步骤展示推理过程
-"""
+_ZONE_ID_PATTERN = re.compile(r"\bzone_[a-zA-Z0-9]+\b")
+_PLAN_ID_PATTERN = re.compile(r"\bplan_[a-zA-Z0-9]+\b")
 
 
-# ============================================================
-#  HydroAgent 核心类
-# ============================================================
+class HydroChatOpenAI(ChatOpenAI):
+    """ChatOpenAI variant that keeps tool message content OpenAI-compatible."""
 
-class HydroLangChainAgent:
-    """
-    HydroAgent 水利灌溉深度智能体
-    
-    架构：LangChain create_react_agent + MCP Client + Middleware PRE循环
-    """
-    
+    async def _astream(self, messages: list[Any], *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        async for chunk in super()._astream(_sanitize_chat_messages(messages), *args, **kwargs):
+            yield chunk
+
+
+class HydroDeepAgent:
+    """Official LangChain agent wrapper with MCP tools and SSE-friendly event conversion."""
+
     def __init__(self):
-        self._agent = None
         self._mcp_client = None
         self._initialized = False
-        self.reflection_middleware = None
-        self.context_middleware = None
-    
+        self._workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        self._checkpointer = None
+        self._tool_registry: dict[str, Any] = {}
+        self._parser_agent: ToolArgumentParserAgent | None = None
+        self._llm: ChatOpenAI | None = None
+        self._compiled_agents: dict[tuple[str, tuple[str, ...]], Any] = {}
+
     async def initialize(self):
-        """异步初始化 Agent"""
         if self._initialized:
             return
-        
-        try:
-            from src.config import config
-            from src.llm.middleware import ReflectionMiddleware, HydroContextMiddleware
-            
-            self.reflection_middleware = ReflectionMiddleware()
-            self.context_middleware = HydroContextMiddleware()
-            
-            # 尝试用 MCP 适配器加载工具
-            try:
-                from langchain_mcp_adapters.client import MultiServerMCPClient
-                from langgraph.prebuilt import create_react_agent
-                from langchain_openai import ChatOpenAI
-                
-                llm = ChatOpenAI(
-                    model=config.MODEL_NAME,
-                    openai_api_key=config.OPENAI_API_KEY,
-                    openai_api_base=config.OPENAI_BASE_URL,
-                    temperature=0.3,
-                    streaming=True,
-                )
-                
-                self._mcp_client = MultiServerMCPClient({
-                    "hydro": {
-                        "transport": "stdio",
-                        "command": "python",
-                        "args": [config.MCP_SERVER_PATH],
-                    }
-                })
-                
-                mcp_tools = await self._mcp_client.get_tools()
-                logger.info(f"[HydroAgent] 从 MCP Server 加载了 {len(mcp_tools)} 个工具")
-                
-                enhanced_prompt = self.context_middleware.inject_into_system_prompt(HYDRO_SYSTEM_PROMPT)
-                
-                self._agent = create_react_agent(
-                    model=llm,
-                    tools=mcp_tools,
-                    prompt=enhanced_prompt,
-                )
-                logger.info(f"[HydroAgent] Agent 初始化完成（MCP 模式），模型: {config.MODEL_NAME}")
-                self._initialized = True
-                return
-            except ImportError as e:
-                logger.warning(f"[HydroAgent] MCP 适配器不可用: {e}，降级到直接工具模式")
-            except Exception as e:
-                logger.warning(f"[HydroAgent] MCP 初始化失败: {e}，降级到直接工具模式")
-            
-            # 降级方案：不使用 MCP，直接定义工具
-            await self._initialize_fallback()
-            
-        except Exception as e:
-            logger.error(f"[HydroAgent] 初始化失败: {e}", exc_info=True)
-            await self._initialize_fallback()
-    
-    async def _initialize_fallback(self):
-        """降级初始化：使用 @tool 直接定义工具"""
-        try:
-            from langchain_openai import ChatOpenAI
-            from langchain.tools import tool
-            from src.config import config
-            
-            llm = ChatOpenAI(
-                model=config.MODEL_NAME,
-                openai_api_key=config.OPENAI_API_KEY,
-                openai_api_base=config.OPENAI_BASE_URL,
-                temperature=0.3,
-                streaming=True,
-            )
-            
-            @tool
-            def query_sensor_data(sensor_id: str = "all") -> str:
-                """查询传感器实时数据：土壤湿度、温度、光照强度、降雨量"""
-                data = {
-                    "soil_moisture": round(random.uniform(25, 65), 2),
-                    "temperature": round(random.uniform(18, 35), 2),
-                    "light_intensity": round(random.uniform(200, 800), 2),
-                    "rainfall": round(random.uniform(0, 2), 2),
+
+        from src.config import config
+
+        workspace_dir = os.path.join(self._workspace_root, ".hydro_workspace")
+        os.makedirs(workspace_dir, exist_ok=True)
+        persistence = get_hydro_persistence()
+        await persistence.initialize()
+        self._checkpointer = persistence.async_saver
+
+        self._llm = HydroChatOpenAI(
+            model=config.MODEL_NAME,
+            api_key=config.OPENAI_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
+            temperature=0.2,
+            streaming=True,
+        )
+
+        self._mcp_client = MultiServerMCPClient(
+            {
+                "hydro": {
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [config.MCP_SERVER_PATH],
                 }
-                moisture = data["soil_moisture"]
-                status = ("⚠️ 严重缺水" if moisture < 25 else "🟡 偏低" if moisture < 40
-                          else "✅ 正常" if moisture < 70 else "💧 充足")
-                return json.dumps({"sensor_id": sensor_id, "timestamp": datetime.datetime.now().isoformat(),
-                                   "readings": data, "status_assessment": status}, ensure_ascii=False)
-            
-            @tool
-            def query_weather(city: str = "北京") -> str:
-                """查询天气预报"""
-                return json.dumps({"city": city, "weather": random.choice(["晴", "多云", "阴"]),
-                                   "temperature": random.randint(22, 32),
-                                   "note": "需配置高德 API 获取真实天气"}, ensure_ascii=False)
-            
-            @tool
-            def control_irrigation(action: str, duration_minutes: int = 30) -> str:
-                """控制灌溉设备：action='start'|'stop'|'status'"""
-                return json.dumps({"success": True, "action": action,
-                                   "message": f"已执行: {action}"}, ensure_ascii=False)
-            
-            @tool
-            def statistical_analysis(data_type: str = "soil_moisture", hours: int = 24) -> str:
-                """对传感器数据进行统计分析，返回均值、趋势等"""
-                import numpy as np
-                values = [round(random.uniform(30, 60), 2) for _ in range(hours * 4)]
-                arr = np.array(values)
-                return json.dumps({
-                    "data_type": data_type, "period": f"最近 {hours} 小时",
-                    "mean": round(float(arr.mean()), 2), "std": round(float(arr.std()), 2),
-                    "min": round(float(arr.min()), 2), "max": round(float(arr.max()), 2),
-                    "trend": "稳定"
-                }, ensure_ascii=False)
-            
-            @tool
-            def recommend_irrigation_plan() -> str:
-                """综合分析当前数据，推荐灌溉方案"""
-                moisture = round(random.uniform(25, 60), 2)
-                needs = moisture < 40
-                return json.dumps({
-                    "current_moisture": f"{moisture}%",
-                    "needs_irrigation": needs,
-                    "recommendation": f"启动灌溉 30 分钟" if needs else "暂不需要灌溉",
-                    "urgency": "建议" if needs else "无需",
-                }, ensure_ascii=False)
-            
-            tools = [query_sensor_data, query_weather, control_irrigation,
-                     statistical_analysis, recommend_irrigation_plan]
-            
-            enhanced_prompt = HYDRO_SYSTEM_PROMPT
-            if self.context_middleware:
-                enhanced_prompt = self.context_middleware.inject_into_system_prompt(HYDRO_SYSTEM_PROMPT)
-            
-            try:
-                from langgraph.prebuilt import create_react_agent
-                self._agent = create_react_agent(
-                    model=llm, tools=tools, prompt=enhanced_prompt,
-                )
-            except ImportError:
-                # 最终降级：使用 AgentExecutor
-                from langchain.agents import AgentExecutor, create_tool_calling_agent
-                from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-                prompt = ChatPromptTemplate.from_messages([
-                    ("system", enhanced_prompt),
-                    MessagesPlaceholder("chat_history", optional=True),
-                    ("human", "{input}"),
-                    MessagesPlaceholder("agent_scratchpad"),
-                ])
-                agent = create_tool_calling_agent(llm, tools, prompt)
-                self._agent = AgentExecutor(agent=agent, tools=tools, verbose=False)
-            
-            self._initialized = True
-            logger.info("[HydroAgent] 降级模式初始化完成（直接工具）")
-        except Exception as e:
-            logger.error(f"[HydroAgent] 降级初始化失败: {e}", exc_info=True)
-            self._initialized = False
-    
-    async def chat_stream(self, messages: list) -> AsyncIterator[dict]:
-        """
-        流式多轮对话 —— 输出事件：
-        - {"type": "text", "content": "..."} 文本片段
-        - {"type": "tool_call", "tool": "...", "args": {...}} 工具调用
-        - {"type": "tool_result", "tool": "...", "result": "..."} 工具结果
-        - {"type": "done"} 完成
-        """
+            }
+        )
+        mcp_tools = await self._mcp_client.get_tools()
+        base_registry = {
+            tool_name: tool_instance for tool_instance in mcp_tools if (tool_name := getattr(tool_instance, "name", None))
+        }
+        self._parser_agent = ToolArgumentParserAgent(llm=self._llm)
+        self._tool_registry = wrap_tool_registry(base_registry, self._parser_agent)
+        custom_tools = _build_custom_tools()
+        for custom_tool in custom_tools:
+            self._tool_registry[getattr(custom_tool, "name")] = custom_tool
+        logger.info("[HydroAgent] Loaded %s MCP tools", len(mcp_tools))
+
+        self._initialized = True
+        logger.info("[HydroAgent] Runtime initialized")
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        *,
+        conversation_id: str | None = None,
+        mode: HydroAgentMode = "planner",
+        runtime_context: dict[str, Any] | None = None,
+        working_memory: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict]:
         if not self._initialized:
             await self.initialize()
-        
-        if not self._agent:
-            yield {"type": "text", "content": "⚠️ Agent 初始化失败，请检查 OpenAI API Key 和网络配置。"}
-            yield {"type": "done"}
-            return
-        
-        try:
-            from langchain.schema import HumanMessage, AIMessage, SystemMessage
-            
-            # 构造 LangChain 消息
-            lc_messages = []
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                if role == "user":
-                    lc_messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    lc_messages.append(AIMessage(content=content))
-            
-            accumulated_text = ""
-            
-            # 判断 agent 类型
-            is_agent_executor = type(self._agent).__name__ == "AgentExecutor"
-            
-            if hasattr(self._agent, 'astream_events'):
-                # 根据不同 agent 类型组装正确的输入荷载
-                if is_agent_executor:
-                    last_user = messages[-1]["content"] if messages else ""
-                    history_msgs = []
-                    for m in messages[:-1]:
-                        if m["role"] == "user":
-                            history_msgs.append(HumanMessage(content=m["content"]))
-                        elif m["role"] == "assistant":
-                            history_msgs.append(AIMessage(content=m["content"]))
-                    input_data = {"input": last_user, "chat_history": history_msgs}
-                else:
-                    input_data = {"messages": lc_messages}
 
-                async for event in self._agent.astream_events(
-                    input_data, version="v2"
-                ):
-                    kind = event.get("event", "")
-                    
-                    if kind == "on_chat_model_stream":
-                        chunk = event.get("data", {}).get("chunk")
-                        if chunk and hasattr(chunk, 'content') and chunk.content:
-                            accumulated_text += chunk.content
-                            yield {"type": "text", "content": chunk.content}
-                    
-                    elif kind == "on_tool_start":
-                        tool_name = event.get("name", "unknown")
-                        tool_input = event.get("data", {}).get("input", {})
-                        yield {"type": "tool_call", "tool": tool_name, "args": tool_input}
-                        if self.reflection_middleware:
-                            self.reflection_middleware.on_tool_end(tool_name, tool_input, "")
-                    
-                    elif kind == "on_tool_end":
-                        tool_name = event.get("name", "unknown")
-                        tool_output = str(event.get("data", {}).get("output", ""))
-                        yield {"type": "tool_result", "tool": tool_name, "result": tool_output[:500]}
-            
-            elif hasattr(self._agent, 'ainvoke'):
-                # 全量回退（极少数情况下无 stream_events）
-                if is_agent_executor:
-                    last_user = messages[-1]["content"] if messages else ""
-                    history_msgs = []
-                    for m in messages[:-1]:
-                        if m["role"] == "user":
-                            history_msgs.append(HumanMessage(content=m["content"]))
-                        elif m["role"] == "assistant":
-                            history_msgs.append(AIMessage(content=m["content"]))
-                    result = await self._agent.ainvoke({"input": last_user, "chat_history": history_msgs})
-                    output = result.get("output", str(result))
-                else:
-                    result = await self._agent.ainvoke({"messages": lc_messages})
-                    output = str(result)
-                yield {"type": "text", "content": output}
-            
-            yield {"type": "done"}
-        
-        except Exception as e:
-            logger.error(f"[HydroAgent] 对话失败: {e}", exc_info=True)
-            yield {"type": "text", "content": f"❌ 处理请求时出错：{str(e)}"}
-            yield {"type": "done"}
-    
-    async def chat(self, messages: list) -> str:
-        """非流式多轮对话"""
-        full_response = []
-        async for chunk in self.chat_stream(messages):
+        runtime_context = runtime_context or {}
+        compiled_agent = self._get_or_create_agent(mode=mode, runtime_context=runtime_context)
+
+        lc_messages = [SystemMessage(content=_build_runtime_context_message(mode, runtime_context, working_memory))]
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            if role == "assistant":
+                lc_messages.append(AIMessage(content=content))
+            else:
+                lc_messages.append(HumanMessage(content=content))
+
+        input_data = {"messages": lc_messages}
+        config = {"configurable": {"thread_id": conversation_id or "hydro-default"}}
+        active_tool_calls: dict[str, dict[str, Any]] = {}
+        ACTIVE_CONVERSATION_ID.set(conversation_id)
+        active_skill_ids = list(runtime_context.get("active_skill_ids") or [])
+        phase_overrides = runtime_context.get("phase_overrides") or {}
+
+        try:
+            async for chunk in compiled_agent.astream(
+                input_data,
+                config=config,
+                stream_mode=["messages", "updates"],
+                version="v2",
+            ):
+                chunk_type = chunk.get("type")
+                if chunk_type == "messages":
+                    message_data = chunk.get("data")
+                    if not isinstance(message_data, tuple | list) or len(message_data) != 2:
+                        continue
+                    message, metadata = message_data
+                    if _should_emit_assistant_text(message, metadata):
+                        for text in _iter_stream_text(message):
+                            yield {
+                                "type": "text",
+                                "content": text,
+                                "agent_name": metadata.get("langgraph_name") or metadata.get("lc_agent_name"),
+                                "node_name": metadata.get("langgraph_node"),
+                                "active_skills": active_skill_ids,
+                            }
+                    continue
+
+                if chunk_type != "updates":
+                    continue
+
+                update_data = chunk.get("data")
+                if not isinstance(update_data, dict):
+                    continue
+
+                for node_name, update in update_data.items():
+                    if not isinstance(update, dict):
+                        continue
+                    streamed_messages = update.get("messages")
+                    if not isinstance(streamed_messages, list):
+                        continue
+
+                    for streamed_message in streamed_messages:
+                        if isinstance(streamed_message, AIMessage):
+                            agent_name = _get_message_agent_name(streamed_message, default="hydro-supervisor")
+                            for tool_call in streamed_message.tool_calls or []:
+                                tool_name = str(tool_call.get("name") or "unknown")
+                                run_id = str(tool_call.get("id") or f"{tool_name}-{id(tool_call)}")
+                                tool_args = tool_call.get("args", {})
+                                normalized_args = None
+                                zone_id = None
+                                plan_id = None
+                                phase = resolve_phase(tool_name, phase_overrides)
+
+                                if isinstance(tool_args, dict):
+                                    resolved_args = (
+                                        await self._parser_agent.normalize_async(tool_name, tool_args)
+                                        if self._parser_agent
+                                        else tool_args
+                                    )
+                                    normalized_args = resolved_args if resolved_args != tool_args else None
+                                    identifiers = _extract_identifiers(resolved_args)
+                                    zone_id = identifiers.get("zone_id")
+                                    plan_id = identifiers.get("plan_id")
+
+                                active_tool_calls[run_id] = {
+                                    "tool_name": tool_name,
+                                    "args": tool_args if isinstance(tool_args, dict) else None,
+                                    "normalized_args": normalized_args,
+                                    "zone_id": zone_id,
+                                    "plan_id": plan_id,
+                                    "phase": phase,
+                                    "started_at": time.perf_counter(),
+                                    "agent_name": agent_name,
+                                    "node_name": node_name,
+                                }
+
+                                yield {
+                                    "type": "tool_call",
+                                    "tool": tool_name,
+                                    "run_id": run_id,
+                                    "args": tool_args if isinstance(tool_args, dict) else None,
+                                    "normalized_args": normalized_args,
+                                    "zone_id": zone_id,
+                                    "plan_id": plan_id,
+                                    "phase": phase,
+                                    "active_skills": active_skill_ids,
+                                    "agent_name": agent_name,
+                                    "node_name": node_name,
+                                }
+
+                        elif isinstance(streamed_message, ToolMessage):
+                            run_id = str(getattr(streamed_message, "tool_call_id", None) or id(streamed_message))
+                            tool_meta = active_tool_calls.pop(run_id, {})
+                            tool_name = str(getattr(streamed_message, "name", None) or tool_meta.get("tool_name") or "unknown")
+                            output = _extract_tool_message_payload(streamed_message)
+                            parsed = _safe_json(output)
+                            duration_ms = None
+                            started_at = tool_meta.get("started_at")
+                            if isinstance(started_at, (int, float)):
+                                duration_ms = int((time.perf_counter() - started_at) * 1000)
+                            identifiers = _extract_identifiers(parsed or {})
+                            zone_id = tool_meta.get("zone_id") or identifiers.get("zone_id")
+                            plan_id = tool_meta.get("plan_id") or identifiers.get("plan_id")
+                            agent_name = tool_meta.get("agent_name")
+                            phase = tool_meta.get("phase") or resolve_phase(tool_name, phase_overrides)
+
+                            structured_event = _tool_output_to_stream_event(tool_name, parsed)
+                            if structured_event:
+                                structured_event["agent_name"] = agent_name
+                                structured_event["node_name"] = node_name
+                                structured_event["phase"] = phase
+                                structured_event["active_skills"] = active_skill_ids
+                                yield structured_event
+
+                            yield {
+                                "type": "tool_result",
+                                "tool": tool_name,
+                                "run_id": run_id,
+                                "args": tool_meta.get("args"),
+                                "normalized_args": tool_meta.get("normalized_args"),
+                                "zone_id": zone_id,
+                                "plan_id": plan_id,
+                                "result": parsed or str(output)[:800],
+                                "output_preview": _stringify_event_payload(output),
+                                "duration_ms": duration_ms,
+                                "phase": phase,
+                                "active_skills": active_skill_ids,
+                                "agent_name": agent_name,
+                                "node_name": node_name,
+                            }
+            yield {"type": "done", "active_skills": active_skill_ids}
+        except Exception as exc:
+            logger.error("[HydroAgent] chat_stream failed: %s", exc, exc_info=True)
+            yield {"type": "error", "content": f"处理请求时出错：{exc}", "active_skills": active_skill_ids}
+            yield {"type": "done", "active_skills": active_skill_ids}
+        finally:
+            ACTIVE_CONVERSATION_ID.set(None)
+
+    async def chat(
+        self,
+        messages: list[dict],
+        *,
+        conversation_id: str | None = None,
+        mode: HydroAgentMode = "planner",
+        runtime_context: dict[str, Any] | None = None,
+        working_memory: dict[str, Any] | None = None,
+    ) -> str:
+        parts = []
+        async for chunk in self.chat_stream(
+            messages,
+            conversation_id=conversation_id,
+            mode=mode,
+            runtime_context=runtime_context,
+            working_memory=working_memory,
+        ):
             if chunk["type"] == "text":
-                full_response.append(chunk["content"])
-        return "".join(full_response)
-    
+                parts.append(chunk["content"])
+        return "".join(parts)
+
     async def auto_check(self) -> str:
-        """定时自动灌溉检查"""
-        auto_prompt = "请自动检查当前传感器数据、天气预报和历史趋势，判断是否需要灌溉。"
-        messages = [{"role": "user", "content": auto_prompt}]
-        result = await self.chat(messages)
-        self._log_auto_decision(auto_prompt, result)
-        return result
-    
-    def _log_auto_decision(self, prompt: str, result: str):
+        from src.database.models import SessionLocal
+        from src.services import create_auto_plan_if_needed, list_zones
+
+        db = SessionLocal()
         try:
-            from src.database.models import SessionLocal, AgentDecisionLog
-            db = SessionLocal()
-            db.add(AgentDecisionLog(
-                trigger="auto",
-                input_context={"prompt": prompt},
-                decision_result={"response": result[:500]},
-                reasoning_chain=result,
-            ))
-            db.commit()
+            results = []
+            for zone in list_zones(db):
+                if not zone.is_enabled:
+                    continue
+                results.append(create_auto_plan_if_needed(db, zone.zone_id))
+            return json.dumps({"generated_plans": results}, ensure_ascii=False)
+        finally:
             db.close()
-        except Exception as e:
-            logger.warning(f"[HydroAgent] 日志记录失败: {e}")
-    
+
     async def cleanup(self):
-        """清理 MCP 客户端连接"""
-        if self._mcp_client:
-            try:
-                await self._mcp_client.__aexit__(None, None, None)
-            except Exception:
-                pass
+        closer = None
+        if self._mcp_client is not None:
+            closer = getattr(self._mcp_client, "aclose", None) or getattr(self._mcp_client, "close", None)
+        if callable(closer):
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+
+        self._mcp_client = None
+        self._tool_registry = {}
+        self._compiled_agents = {}
+        self._parser_agent = None
+        self._llm = None
+        self._initialized = False
+        self._checkpointer = None
+
+    async def reload(self):
+        """在设置变更后热重载 Agent，确保新 key / endpoint / model 立即生效。"""
+        await self.cleanup()
+        await self.initialize()
+
+    def _get_or_create_agent(self, *, mode: HydroAgentMode, runtime_context: dict[str, Any]):
+        if not self._llm:
+            raise RuntimeError("HydroAgent 尚未初始化 LLM")
+        cache_key = (mode, tuple(sorted(runtime_context.get("active_skill_ids") or [])))
+        cached = self._compiled_agents.get(cache_key)
+        if cached is not None:
+            return cached
+
+        allowed_tools = runtime_context.get("allowed_tools") or []
+        prompt_fragments = runtime_context.get("prompt_fragments") or []
+        compiled = create_agent(
+            model=self._llm,
+            tools=_select_tools(self._tool_registry, tuple(allowed_tools)),
+            system_prompt=build_system_prompt(mode, prompt_fragments),
+            checkpointer=self._checkpointer,
+            name="hydro-supervisor",
+        )
+        self._compiled_agents[cache_key] = compiled
+        return compiled
 
 
-# 全局单例
-_hydro_agent: Optional[HydroLangChainAgent] = None
+def _build_runtime_context_message(mode: HydroAgentMode, runtime_context: dict[str, Any], working_memory: dict[str, Any] | None) -> str:
+    safe_memory = working_memory or {}
+    safe_context = {
+        "inferred_mode": mode,
+        "active_skill_ids": runtime_context.get("active_skill_ids") or [],
+        "skill_reason": runtime_context.get("reason") or "",
+        "skill_conflicts": runtime_context.get("conflicts") or [],
+        "skill_resources": runtime_context.get("resources") or [],
+        "workflow_phases": runtime_context.get("workflow_phases") or [],
+        "working_memory": {
+            "active_zone_ids": safe_memory.get("active_zone_ids") or [],
+            "latest_plan_ids": safe_memory.get("latest_plan_ids") or [],
+            "latest_pending_plan_ids": safe_memory.get("latest_pending_plan_ids") or [],
+            "latest_approved_plan_ids": safe_memory.get("latest_approved_plan_ids") or [],
+            "open_risks": safe_memory.get("open_risks") or [],
+            "last_user_goal": safe_memory.get("last_user_goal") or "",
+            "last_decision_summary": safe_memory.get("last_decision_summary") or "",
+            "last_sensor_anomalies": safe_memory.get("last_sensor_anomalies") or [],
+        },
+    }
+    # 将工作记忆与 skill 元数据以单独 system message 注入，避免把这类上下文写死到模式 prompt 中。
+    return "当前回合运行时上下文如下，请仅将其作为约束和线索，不要原样复述给用户：\n" + json.dumps(
+        safe_context,
+        ensure_ascii=False,
+        indent=2,
+    )
 
-def get_hydro_agent() -> HydroLangChainAgent:
-    """获取 HydroAgent 全局单例"""
+
+def _safe_json(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+    try:
+        if hasattr(value, "content"):
+            return _safe_json(value.content)
+        return json.loads(str(value))
+    except Exception:
+        return None
+
+
+def _select_tools(tool_registry: dict[str, Any], names: tuple[str, ...]) -> list[Any]:
+    selected: list[Any] = []
+    missing: list[str] = []
+    for name in names:
+        tool_instance = tool_registry.get(name)
+        if tool_instance is None:
+            missing.append(name)
+            continue
+        selected.append(tool_instance)
+    if missing:
+        logger.warning("[HydroAgent] Missing tools: %s", ", ".join(missing))
+    return selected
+
+
+def _build_custom_tools() -> list[Any]:
+    @tool("search_knowledge_base")
+    def search_knowledge_base_tool(question: str, top_k: int = 4) -> dict[str, Any]:
+        """查询本地知识库，用于补充设备文档、SOP、项目约束与背景知识。"""
+        from src.knowledge import KnowledgeBaseError, search_knowledge_base
+
+        try:
+            payload = search_knowledge_base(question, limit=top_k)
+        except KnowledgeBaseError as exc:
+            return {"query": question, "results": [], "error": str(exc)}
+
+        results = payload.get("results") or []
+        return {
+            "query": question,
+            "result_count": len(results),
+            "results": [
+                {
+                    "document_id": item.get("document_id"),
+                    "title": item.get("title"),
+                    "source_uri": item.get("source_uri"),
+                    "chunk_index": item.get("chunk_index"),
+                    "score": item.get("score"),
+                    "content": item.get("content"),
+                }
+                for item in results
+            ],
+        }
+
+    return [search_knowledge_base_tool]
+
+
+def _extract_identifiers(payload: Any, text_fallback: str = "") -> dict[str, str | None]:
+    zone_id = _find_nested_value(payload, "zone_id") or _search_pattern(_ZONE_ID_PATTERN, text_fallback)
+    plan_id = _find_nested_value(payload, "plan_id") or _search_pattern(_PLAN_ID_PATTERN, text_fallback)
+    return {"zone_id": zone_id, "plan_id": plan_id}
+
+
+def _find_nested_value(payload: Any, key: str) -> str | None:
+    if isinstance(payload, dict):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+        for nested in payload.values():
+            found = _find_nested_value(nested, key)
+            if found:
+                return found
+        return None
+    if isinstance(payload, list):
+        for item in payload:
+            found = _find_nested_value(item, key)
+            if found:
+                return found
+    return None
+
+
+def _search_pattern(pattern: re.Pattern[str], text_value: str) -> str | None:
+    for match in pattern.finditer(text_value or ""):
+        candidate = match.group(0)
+        if candidate not in {"zone_id", "plan_id"}:
+            return candidate
+    return None
+
+
+def _stringify_event_payload(payload: Any, limit: int = 240) -> str:
+    parsed = _safe_json(payload)
+    if parsed is not None:
+        text = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+    elif hasattr(payload, "content"):
+        text = _stringify_event_payload(payload.content, limit=limit)
+    else:
+        text = str(payload)
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _sanitize_chat_messages(messages: list[Any]) -> list[Any]:
+    sanitized = []
+    for message in messages:
+        content = getattr(message, "content", None)
+        if isinstance(content, str) or content is None:
+            sanitized.append(message)
+            continue
+
+        replacement = _coerce_message_content_to_text(content)
+        copier = getattr(message, "model_copy", None)
+        if callable(copier):
+            sanitized.append(copier(update={"content": replacement}))
+            continue
+        legacy_copier = getattr(message, "copy", None)
+        if callable(legacy_copier):
+            sanitized.append(legacy_copier(update={"content": replacement}))
+            continue
+
+        message.content = replacement
+        sanitized.append(message)
+    return sanitized
+
+
+def _coerce_message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        text_blocks = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                text_blocks.append(item["text"])
+                continue
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                text_blocks.append(text)
+        if text_blocks and len(text_blocks) == len(content):
+            return "\n".join(text_blocks)
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:
+        return str(content)
+
+
+def _get_message_agent_name(message: Any, default: str | None = None) -> str | None:
+    agent_name = getattr(message, "name", None)
+    return str(agent_name) if isinstance(agent_name, str) and agent_name else default
+
+
+def _should_emit_assistant_text(message: Any, metadata: dict[str, Any] | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("langgraph_node") != "model":
+        return False
+    agent_name = metadata.get("langgraph_name") or metadata.get("lc_agent_name")
+    return agent_name in {None, "", "hydro-supervisor"}
+
+
+def _iter_stream_text(message: Any):
+    content_blocks = getattr(message, "content_blocks", None)
+    if not isinstance(content_blocks, list):
+        return
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text:
+            yield text
+
+
+def _extract_tool_message_payload(message: Any) -> Any:
+    artifact = getattr(message, "artifact", None)
+    if isinstance(artifact, dict):
+        structured = artifact.get("structured_content")
+        if isinstance(structured, dict) and "result" in structured:
+            return structured.get("result")
+
+    content_blocks = getattr(message, "content_blocks", None)
+    if isinstance(content_blocks, list):
+        texts = [
+            block.get("text")
+            for block in content_blocks
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        if len(texts) == 1:
+            return texts[0]
+        if texts:
+            return "\n".join(texts)
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    return str(content or "")
+
+
+def _tool_output_to_stream_event(tool_name: str, payload: dict | None) -> dict | None:
+    if not payload:
+        return None
+
+    result_plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else None
+    has_embedded_plan_identity = isinstance((result_plan or {}).get("plan_id"), str) and bool(str(result_plan.get("plan_id")).strip())
+    has_plan_identity = isinstance(payload.get("plan_id"), str) and bool(str(payload.get("plan_id")).strip())
+    suggestion = payload.get("suggestion") if isinstance(payload.get("suggestion"), dict) else None
+    has_suggestion_identity = isinstance((suggestion or {}).get("suggestion_id"), str) and bool(str(suggestion.get("suggestion_id")).strip())
+
+    if tool_name == "create_irrigation_plan" and payload.get("suggestion_only") and has_suggestion_identity:
+        return {"type": "suggestion_result", "suggestion": suggestion}
+    if tool_name == "create_irrigation_plan" and has_embedded_plan_identity:
+        return {"type": "plan_updated" if payload.get("reused_existing") else "plan_proposed", "plan": result_plan}
+    if tool_name == "get_plan_status" and has_plan_identity:
+        return {"type": "plan_updated", "plan": payload}
+    if tool_name == "approve_irrigation_plan" and has_plan_identity:
+        return {"type": "approval_result", "plan": payload, "decision": "approved"}
+    if tool_name == "reject_irrigation_plan" and has_plan_identity:
+        return {"type": "approval_result", "plan": payload, "decision": "rejected"}
+    if tool_name == "execute_approved_plan" and has_plan_identity:
+        return {"type": "execution_result", "plan": payload}
+    if tool_name == "control_irrigation" and payload.get("requires_approval"):
+        return {
+            "type": "approval_requested",
+            "tool": tool_name,
+            "details": payload,
+        }
+    return None
+
+
+_hydro_agent: Optional[HydroDeepAgent] = None
+
+
+def get_hydro_agent() -> HydroDeepAgent:
     global _hydro_agent
     if _hydro_agent is None:
-        _hydro_agent = HydroLangChainAgent()
+        _hydro_agent = HydroDeepAgent()
     return _hydro_agent
+
+
+HydroLangChainAgent = HydroDeepAgent

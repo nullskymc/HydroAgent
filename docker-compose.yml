@@ -1,15 +1,39 @@
-version: '3.8'
-
 services:
-  smart-irrigation:
+  backend:
     image: registry.cn-hangzhou.aliyuncs.com/nullskymc/smart-irrigation:latest
-    container_name: smart-irrigation
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart-irrigation-backend
     restart: unless-stopped
     ports:
       - "7860:7860"
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
+      - APP_HOST=0.0.0.0
+      - APP_PORT=7860
+      - FRONTEND_ORIGINS=${FRONTEND_ORIGINS:-http://localhost:3000}
+      - HYDROAUTH_SECRET=${HYDROAUTH_SECRET:-change-me-in-production}
+      - HYDRO_CONFIG_SECRET=${HYDRO_CONFIG_SECRET:-change-me-in-production}
     volumes:
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: smart-irrigation-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=Asia/Shanghai
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - BACKEND_API_BASE_URL=http://backend:7860
+      - AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE:-false}

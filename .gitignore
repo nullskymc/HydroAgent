@@ -180,3 +180,7 @@ config.yaml
 */node_modules
 */dist
 *.db
+.codex/
+.hydro_workspace
+logs/
+output/playwright/

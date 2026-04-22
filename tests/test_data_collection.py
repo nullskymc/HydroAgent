@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 from datetime import datetime
 from src.data.data_collection import DataCollectionModule
-from exceptions import InvalidSensorDataError
+from src.exceptions.exceptions import InvalidSensorDataError
 
 class TestDataCollectionModule(unittest.TestCase):
     """测试数据采集模块"""

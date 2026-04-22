@@ -23,6 +23,9 @@ class TestConfig(unittest.TestCase):
                 "password": "test-db-password",
                 "type": "postgresql"
             },
+            "model_name": "yaml-model",
+            "embedding_model_name": "yaml-embedding-model",
+            "openai_base_url": "https://yaml.example.com/v1",
             "apis": {
                 "weather_api_key": "test-api-key",
                 "weather_service_url": "http://test-api.example.com"
@@ -41,6 +44,7 @@ class TestConfig(unittest.TestCase):
         # 设置测试环境变量
         os.environ["DB_HOST"] = "env-db-host"
         os.environ["WEATHER_API_KEY"] = "env-api-key"
+        os.environ["MODEL_NAME"] = "env-model-should-not-win"
     
     def tearDown(self):
         """测试后清理工作"""
@@ -99,6 +103,31 @@ class TestConfig(unittest.TestCase):
         config = Config(config_file_path=self.config_file.name)
         expected_uri = f"mysql+pymysql://{config.DB_USER}:{config.DB_PASSWORD}@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
         self.assertEqual(config.get_db_uri(), expected_uri)
+
+    def test_secret_settings_are_masked_in_runtime_snapshot(self):
+        """测试敏感配置仅以掩码状态暴露给前端。"""
+        config = Config(config_file_path=self.config_file.name)
+        config.update_runtime_settings({
+            "openai_api_key": "sk-secret-demo",
+            "embedding_api_key": "sk-embed-demo",
+        })
+
+        runtime = config.get_runtime_settings()
+        self.assertTrue(runtime["openai_api_key_status"]["configured"])
+        self.assertTrue(runtime["embedding_api_key_status"]["configured"])
+        self.assertNotIn("sk-secret-demo", str(runtime))
+        self.assertNotIn("sk-embed-demo", str(runtime))
+
+    def test_yaml_managed_model_settings_override_custom_env(self):
+        """YAML 托管的模型配置应优先于同名环境变量。"""
+        config = Config(config_file_path=self.config_file.name)
+
+        self.assertEqual(config.MODEL_NAME, "yaml-model")
+        self.assertEqual(config.EMBEDDING_MODEL_NAME, "yaml-embedding-model")
+        self.assertEqual(config.OPENAI_BASE_URL, "https://yaml.example.com/v1")
+        self.assertEqual(os.environ["MODEL_NAME"], "yaml-model")
+        self.assertEqual(os.environ["EMBEDDING_MODEL_NAME"], "yaml-embedding-model")
+        self.assertEqual(os.environ["OPENAI_BASE_URL"], "https://yaml.example.com/v1")
 
 if __name__ == "__main__":
     unittest.main()

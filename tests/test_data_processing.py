@@ -113,44 +113,46 @@ class TestDataProcessingModule(unittest.TestCase):
     
     @patch('src.data.data_processing.requests.get')
     def test_get_weather_data_success(self, mock_get):
-        """测试成功获取天气数据"""
-        # 模拟API响应
+        """测试成功获取 Open-Meteo 天气数据"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "name": "Tokyo",
-            "main": {
-                "temp": 22.5,
-                "humidity": 65
+            "current": {
+                "time": "2026-04-04T10:00",
+                "temperature_2m": 22.5,
+                "relative_humidity_2m": 65,
+                "precipitation": 0.0,
+                "weather_code": 0,
+                "wind_speed_10m": 3.2,
+                "wind_direction_10m": 225,
             },
-            "wind": {
-                "speed": 3.2
+            "daily": {
+                "time": ["2026-04-04", "2026-04-05"],
+                "weather_code": [0, 61],
+                "temperature_2m_max": [28, 24],
+                "temperature_2m_min": [18, 16],
+                "wind_speed_10m_max": [4.0, 5.5],
+                "wind_direction_10m_dominant": [225, 180],
+                "precipitation_probability_max": [10, 80],
             },
-            "weather": [
-                {"description": "晴天"}
-            ],
-            "rain": {
-                "1h": 0.0
-            }
         }
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
-        
-        # 获取天气数据
-        weather_data = self.processing_module.get_weather_data("Tokyo")
-        
-        # 验证请求参数
+
+        weather_data = self.processing_module.get_weather_data("110105")
+
         mock_get.assert_called_once()
-        args, kwargs = mock_get.call_args
-        self.assertEqual(kwargs["params"]["q"], "Tokyo")
-        self.assertEqual(kwargs["params"]["appid"], self.api_key)
-        
-        # 验证返回数据
-        self.assertEqual(weather_data["location"], "Tokyo")
+        _, kwargs = mock_get.call_args
+        self.assertEqual(kwargs["params"]["latitude"], 39.9219)
+        self.assertEqual(kwargs["params"]["longitude"], 116.4436)
+        self.assertEqual(kwargs["params"]["forecast_days"], 4)
+
+        self.assertEqual(weather_data["location"], "朝阳区")
         self.assertEqual(weather_data["temperature"], 22.5)
         self.assertEqual(weather_data["humidity"], 65)
         self.assertEqual(weather_data["wind_speed"], 3.2)
-        self.assertEqual(weather_data["condition"], "晴天")
+        self.assertEqual(weather_data["condition"], "晴")
         self.assertEqual(weather_data["precipitation"], 0.0)
+        self.assertEqual(weather_data["forecast"][1]["dayweather"], "小雨")
     
     @patch('src.data.data_processing.requests.get')
     def test_get_weather_data_api_error(self, mock_get):
@@ -162,12 +164,36 @@ class TestDataProcessingModule(unittest.TestCase):
         with self.assertRaises(WeatherAPIError):
             self.processing_module.get_weather_data("Tokyo")
     
-    def test_get_weather_data_no_api_key(self):
-        """测试没有API密钥的情况"""
-        module = DataProcessingModule(api_key=None)
-        
-        with self.assertRaises(WeatherAPIError):
-            module.get_weather_data("Tokyo")
+    @patch('src.data.data_processing.requests.get')
+    def test_get_weather_data_no_api_key(self, mock_get):
+        """测试 Open-Meteo 不依赖 API 密钥"""
+        module = DataProcessingModule(api_key=None, api_url=self.api_url)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "current": {
+                "time": "2026-04-04T10:00",
+                "temperature_2m": 21,
+                "relative_humidity_2m": 50,
+                "precipitation": 0.0,
+                "weather_code": 1,
+                "wind_speed_10m": 2.5,
+                "wind_direction_10m": 90,
+            },
+            "daily": {
+                "time": ["2026-04-04"],
+                "weather_code": [1],
+                "temperature_2m_max": [25],
+                "temperature_2m_min": [16],
+                "wind_speed_10m_max": [3],
+                "wind_direction_10m_dominant": [90],
+                "precipitation_probability_max": [5],
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        weather_data = module.get_weather_data("110105")
+        self.assertEqual(weather_data["condition"], "大部晴朗")
     
     @patch('src.data.data_processing.DataProcessingModule.process_sensor_data')
     @patch('src.data.data_processing.DataProcessingModule.get_weather_data')
@@ -242,7 +268,7 @@ class TestDataProcessingModule(unittest.TestCase):
         # 测试未知城市，应返回默认值
         self.assertEqual(self.processing_module.city_to_code("未知城市"), "110000")
     
-    @patch('requests.get')
+    @patch('src.data.data_processing.requests.get')
     def test_get_weather_data(self, mock_get):
         """测试获取天气数据"""
         # Mock 模拟成功响应
@@ -276,12 +302,11 @@ class TestDataProcessingModule(unittest.TestCase):
         self.assertEqual(weather_data["lives"]["city"], "朝阳区")
         self.assertEqual(weather_data["lives"]["temperature"], "26")
     
-    @patch('requests.get')
+    @patch('src.data.data_processing.requests.get')
     def test_get_weather_data_forecast(self, mock_get):
         """测试获取天气预报数据"""
-        # 首先Mock实况天气
-        live_response = MagicMock()
-        live_response.json.return_value = {
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
             "status": "1",
             "info": "OK",
             "infocode": "10000",
@@ -292,15 +317,7 @@ class TestDataProcessingModule(unittest.TestCase):
                 "weather": "晴",
                 "temperature": "26",
                 "humidity": "46"
-            }]
-        }
-        
-        # 然后Mock预报天气
-        forecast_response = MagicMock()
-        forecast_response.json.return_value = {
-            "status": "1",
-            "info": "OK",
-            "infocode": "10000",
+            }],
             "forecasts": [{
                 "city": "朝阳区",
                 "adcode": "110105",
@@ -326,9 +343,8 @@ class TestDataProcessingModule(unittest.TestCase):
                 ]
             }]
         }
-        
-        # 设置两次请求的不同响应
-        mock_get.side_effect = [live_response, forecast_response]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
         
         # 调用方法
         weather_data = self.processing_module.get_weather_data("110105")
@@ -361,20 +377,10 @@ class TestDataProcessingModule(unittest.TestCase):
         self.assertEqual(weather["adcode"], "110000")
         self.assertEqual(weather["city"], "北京市")
     
-    @patch('requests.get')
+    @patch('src.data.data_processing.requests.get')
     def test_api_error_handling(self, mock_get):
         """测试API错误处理"""
-        # Mock 请求失败的响应
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "status": "0",
-            "info": "INVALID_USER_KEY",
-            "infocode": "10001"
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
-        
-        # 测试处理API错误
+        mock_get.side_effect = Exception("upstream timeout")
         with self.assertRaises(WeatherAPIError):
             self.processing_module.get_weather_data("110105")
 

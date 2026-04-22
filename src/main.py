@@ -1,6 +1,6 @@
 """
 HydroAgent 主入口 — FastAPI 服务器
-启动后端 API 服务并 serve 前端静态文件
+启动后端 API 服务并提供独立前后端部署所需的接口能力
 """
 import sys
 import os
@@ -15,13 +15,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.logger_config import logger
 from src.config import config
-from src.database.models import init_db
+from src.database.models import SessionLocal, init_db
 from src.api import router as api_router
+from src.routers.alert_router import router as alert_router
+from src.routers.analytics_router import router as analytics_router
+from src.routers.asset_router import router as asset_router
+from src.routers.auth_router import router as auth_router
+from src.routers.knowledge_router import router as knowledge_router
+from src.routers.report_router import router as report_router
+from src.routers.user_router import router as user_router
+from src.services import bootstrap_default_zones
+from src.services.alert_service import ensure_alert_rules
+from src.services.asset_service import ensure_sensor_devices
+from src.services.auth_service import ensure_auth_seed
+from src.services.system_settings_service import ensure_system_settings, get_collection_interval_minutes
 
 # ============================================================
 #  FastAPI 应用配置
@@ -38,7 +49,7 @@ app = FastAPI(
 # CORS —— 允许前端开发模式下的跨域请求
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,6 +57,13 @@ app.add_middleware(
 
 # 注册 API 路由
 app.include_router(api_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(user_router, prefix="/api")
+app.include_router(asset_router, prefix="/api")
+app.include_router(knowledge_router, prefix="/api")
+app.include_router(alert_router, prefix="/api")
+app.include_router(analytics_router, prefix="/api")
+app.include_router(report_router, prefix="/api")
 
 
 # ============================================================
@@ -61,9 +79,26 @@ async def startup_event():
     # 初始化数据库（自动建表）
     try:
         init_db()
+        db = SessionLocal()
+        try:
+            ensure_system_settings(db)
+            bootstrap_default_zones(db)
+            ensure_sensor_devices(db)
+            ensure_auth_seed(db)
+            ensure_alert_rules(db)
+        finally:
+            db.close()
         logger.info(f"✅ 数据库初始化完成 ({config.DB_TYPE})")
     except Exception as e:
         logger.error(f"❌ 数据库初始化失败: {e}")
+
+    try:
+        from src.llm.persistence import get_hydro_persistence
+
+        await get_hydro_persistence().initialize()
+        logger.info("✅ LangGraph SQLite persistence 已初始化")
+    except Exception as e:
+        logger.error(f"❌ LangGraph persistence 初始化失败: {e}")
     
     # 异步预热 Agent（非阻塞）
     async def _warmup():
@@ -94,6 +129,12 @@ async def shutdown_event():
         await agent.cleanup()
     except Exception:
         pass
+    try:
+        from src.llm.persistence import get_hydro_persistence
+
+        await get_hydro_persistence().close()
+    except Exception:
+        pass
     logger.info("👋 HydroAgent 已关闭")
 
 
@@ -119,7 +160,11 @@ def _run_auto_check():
 
 def _start_auto_check_scheduler():
     """启动定时任务调度器（每小时检查一次）"""
-    interval_minutes = config.DATA_COLLECTION_INTERVAL_MINUTES
+    db = SessionLocal()
+    try:
+        interval_minutes = get_collection_interval_minutes(db)
+    finally:
+        db.close()
     
     def scheduler_thread():
         schedule.every(interval_minutes).minutes.do(_run_auto_check)
@@ -132,43 +177,30 @@ def _start_auto_check_scheduler():
     t.start()
 
 
-# ============================================================
-#  前端静态文件 Serve（生产模式）
-# ============================================================
-
-frontend_dist = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    '../frontend/dist'
-)
-
-if os.path.exists(frontend_dist):
-    # 生产模式：serve 构建后的 Vite 静态文件
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
-    logger.info(f"✅ 前端静态文件已挂载: {frontend_dist}")
-else:
-    # 开发模式提示
-    @app.get("/")
-    async def index():
-        from fastapi.responses import HTMLResponse
-        return HTMLResponse("""
-        <html>
-        <head><title>HydroAgent</title></head>
-        <body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding:50px">
-            <h1>🌊 HydroAgent v4.0.0</h1>
-            <p>后端 API 已启动</p>
-            <p>前端开发模式：运行 <code>cd frontend && npm run dev</code></p>
-            <p><a href="/api/docs" style="color:#38bdf8">📖 API 文档</a></p>
-            <p><a href="/api/status" style="color:#38bdf8">📊 系统状态</a></p>
-        </body>
-        </html>
-        """)
+@app.get("/")
+async def index():
+    from fastapi.responses import HTMLResponse
+    origins = ", ".join(config.FRONTEND_ORIGINS)
+    return HTMLResponse(f"""
+    <html>
+    <head><title>HydroAgent API</title></head>
+    <body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding:50px">
+        <h1>HydroAgent API</h1>
+        <p>后端 API 已启动，前端请通过独立的 Next.js / Vercel 应用访问。</p>
+        <p>允许的前端来源: <code>{origins}</code></p>
+        <p><a href="/api/docs" style="color:#38bdf8">API 文档</a></p>
+        <p><a href="/api/status" style="color:#38bdf8">系统状态</a></p>
+        <p><a href="/api/health" style="color:#38bdf8">健康检查</a></p>
+    </body>
+    </html>
+    """)
 
 
 # ============================================================
 #  入口
 # ============================================================
 
-if __name__ == "__main__":
+def main():
     import uvicorn
     uvicorn.run(
         "src.main:app",
@@ -177,3 +209,7 @@ if __name__ == "__main__":
         reload=False,
         log_level="info",
     )
+
+
+if __name__ == "__main__":
+    main()
