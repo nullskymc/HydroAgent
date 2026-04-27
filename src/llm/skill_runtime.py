@@ -452,10 +452,19 @@ class HydroSkillRuntime:
         if explicit_missing:
             conflicts.append(f"未找到 skill：{', '.join(explicit_missing)}")
 
-        allowed_tools = list(mode_tool_names(resolved_mode))
+        mode_allowed_tools = list(mode_tool_names(resolved_mode))
+        skill_tool_order: list[str] = []
         for skill in ordered_skills:
-            if skill.tool_allowlist:
-                allowed_tools = [tool_name for tool_name in allowed_tools if tool_name in skill.tool_allowlist]
+            for tool_name in skill.tool_allowlist:
+                if tool_name in mode_allowed_tools and tool_name not in skill_tool_order:
+                    skill_tool_order.append(tool_name)
+
+        # Skill 只调整工具优先级，不剥离当前模式需要的基础观测与分析工具。
+        # 模式白名单仍是硬安全边界，因此 planner 不会获得审批或执行工具。
+        allowed_tools = [
+            *skill_tool_order,
+            *[tool_name for tool_name in mode_allowed_tools if tool_name not in skill_tool_order],
+        ]
 
         workflow_overrides: dict[str, HydroPhase] = {}
         workflow_phases: list[HydroPhase] = []
