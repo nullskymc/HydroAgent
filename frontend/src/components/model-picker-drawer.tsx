@@ -165,7 +165,7 @@ function ModelPickerDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 p-4 backdrop-blur-sm" role="presentation" onClick={onClose}>
       <motion.aside
-        className="w-full max-w-md rounded-2xl border border-slate-100 bg-white shadow-xl"
+        className="w-full max-w-md rounded-lg border border-slate-100 bg-white shadow-lg"
         role="dialog"
         aria-modal="true"
         aria-label="Select ML Model"
@@ -229,7 +229,7 @@ function ModelPickerDialog({
             Cancel
           </button>
           <Button
-            className="h-9 rounded-lg bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] px-6 text-sm font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+            className="h-9 rounded-md bg-[#0052FF] px-6 text-sm font-medium text-white shadow-sm shadow-blue-500/10 transition-colors hover:bg-[#0047DB]"
             disabled={!draftModel}
             onClick={confirmSelection}
           >

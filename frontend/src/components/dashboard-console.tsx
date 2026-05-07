@@ -6,7 +6,6 @@ import { motion, type Variants } from 'framer-motion'
 import { CloudRain, Droplets, Power, Sun, Thermometer } from 'lucide-react'
 import { DashboardChatLauncher } from '@/components/dashboard-chat-launcher'
 import { Badge, StatusDot } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { SectionBadge } from '@/components/ui/section-badge'
 import { apiGet } from '@/lib/api-client'
@@ -137,8 +136,8 @@ function DeviceControlCard({ dashboard }: { dashboard: DashboardData }) {
   const running = dashboard.irrigation?.status === 'running'
   const statusLabel = labelFor(dashboard.irrigation?.status || 'idle')
   const content = (
-    <Card className="h-full border-0 bg-white shadow-none hover:translate-y-0 hover:shadow-none">
-      <CardContent className="flex h-full flex-col gap-4 p-4">
+    <section className="h-full border-0 bg-white shadow-none">
+      <div className="flex h-full flex-col gap-4 p-4">
         <div className="flex items-center justify-between gap-3">
           <SectionBadge label="Device Control" />
           <Badge tone={running ? 'warning' : 'success'}>{statusLabel}</Badge>
@@ -148,7 +147,7 @@ function DeviceControlCard({ dashboard }: { dashboard: DashboardData }) {
             <Power className="size-5" aria-hidden="true" />
           </div>
           <div>
-            <h3 className="m-0 font-serif text-xl text-slate-950">设备控制</h3>
+            <h3 className="m-0 text-base font-semibold text-slate-950">设备控制</h3>
             <p className="m-0 mt-1 text-xs text-slate-500">执行状态由后端计划与审批链路驱动。</p>
           </div>
         </div>
@@ -166,16 +165,16 @@ function DeviceControlCard({ dashboard }: { dashboard: DashboardData }) {
             </strong>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 
   if (!running) {
-    return <div className="h-full rounded-lg bg-white shadow-sm ring-1 ring-blue-100 transition hover:-translate-y-0.5 hover:shadow-md">{content}</div>
+    return <div className="h-full rounded-lg bg-white shadow-sm ring-1 ring-blue-100">{content}</div>
   }
 
   return (
-    <div className="h-full rounded-lg bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] p-0.5 shadow-electric transition hover:-translate-y-0.5">
+    <div className="h-full rounded-lg bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] p-0.5 shadow-electric">
       {content}
     </div>
   )
@@ -248,7 +247,7 @@ export function DashboardConsole({
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div className="max-w-2xl">
             <SectionBadge label="HydroAgent Overview" />
-            <h1 className="mt-2 font-serif text-3xl leading-tight text-slate-950">智能灌溉控制台</h1>
+            <h1 className="mt-2 text-2xl font-semibold leading-tight text-slate-950">智能灌溉控制台</h1>
             <p className="mt-2 text-sm leading-6 text-slate-500">
               以计划、审批、执行和审计链路组织灌溉决策，当前数据每 5 秒自动刷新。
             </p>
@@ -275,7 +274,7 @@ export function DashboardConsole({
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <SectionBadge label="24H Trend" />
-                <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">近24小时运行趋势</h2>
+                <h2 className="m-0 mt-3 text-base font-semibold text-slate-950">近24小时运行趋势</h2>
               </div>
               <span className="text-sm text-slate-500">{zoneRows.length} 个分区</span>
             </div>
@@ -292,7 +291,7 @@ export function DashboardConsole({
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <SectionBadge label="Zone Status" />
-                <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">分区状态</h2>
+                <h2 className="m-0 mt-3 text-base font-semibold text-slate-950">分区状态</h2>
               </div>
               <span className="text-sm text-slate-500">阈值默认 {formatPercent1(settings?.soil_moisture_threshold ?? 40)}</span>
             </div>
@@ -344,7 +343,7 @@ export function DashboardConsole({
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <SectionBadge label="Weather Window" />
-                <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">天气预报</h2>
+                <h2 className="m-0 mt-3 text-base font-semibold text-slate-950">天气预报</h2>
               </div>
               <Badge tone="success">
                 <CloudRain className="size-3" />

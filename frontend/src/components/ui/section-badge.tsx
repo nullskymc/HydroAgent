@@ -11,7 +11,7 @@ export function SectionBadge({ label, className }: { label: string; className?: 
         animate={{ scale: [1, 1.45, 1], opacity: [0.55, 1, 0.55] }}
         transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
       />
-      <span className="font-mono text-[0.64rem] font-semibold uppercase tracking-widest">{label}</span>
+      <span className="font-mono text-[0.68rem] font-semibold tracking-normal">{label}</span>
     </div>
   )
 }

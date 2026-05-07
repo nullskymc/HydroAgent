@@ -1,7 +1,7 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { SectionBadge } from '@/components/ui/section-badge'
 import { PLAN_STAGE_LABELS, labelFor } from '@/lib/labels'
@@ -19,16 +19,14 @@ const valueAxisStyle = {
   splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } },
 }
 
-function chartShell(label: string, children: React.ReactNode) {
+function chartShell(label: string, children: ReactNode) {
   return (
-    <Card className="hover:-translate-y-0">
-      <CardContent className="p-4">
-        <div className="mb-4">
-          <SectionBadge label={label} />
-        </div>
-        {children}
-      </CardContent>
-    </Card>
+    <section className="surface-panel">
+      <div className="mb-4">
+        <SectionBadge label={label} />
+      </div>
+      {children}
+    </section>
   )
 }
 

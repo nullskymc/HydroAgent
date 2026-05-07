@@ -8,7 +8,7 @@ export function DashboardChatLauncher({ compact = false }: { compact?: boolean }
         <div className="mb-3 flex items-center justify-between gap-3 px-1">
           <div>
             <p className="eyebrow">智能体</p>
-            <h2 className="m-0 mt-1 font-serif text-xl leading-none text-slate-950">快速发起对话</h2>
+            <h2 className="m-0 mt-1 text-base font-semibold leading-none text-slate-950">快速发起对话</h2>
           </div>
           <div className="flex size-9 items-center justify-center rounded-lg bg-blue-50 text-[#0052FF]">
             <Bot className="size-4" aria-hidden="true" />

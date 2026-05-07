@@ -33,7 +33,7 @@ const compactNumberInputClass =
 const compactTextareaClass =
   'min-h-44 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm shadow-none ring-0 transition-all focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-[#0052FF]/20'
 const primaryActionClass =
-  'h-9 rounded-md bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] px-4 text-white shadow-sm transition-transform hover:-translate-y-0.5'
+  'h-9 rounded-md bg-[#0052FF] px-4 text-white shadow-sm shadow-blue-500/10 transition-colors hover:bg-[#0047DB]'
 const secondaryActionClass =
   'h-9 rounded-md border border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50 hover:shadow-none hover:translate-y-0'
 const checkboxClass = 'size-4 rounded border-slate-300 text-[#0052FF] focus:ring-2 focus:ring-blue-500/20'

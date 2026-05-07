@@ -101,12 +101,15 @@
   }
 
   .brand-block h1,
-  .page-header-block h1,
+  .page-header-block h1 {
+    @apply m-0 font-serif tracking-normal text-slate-950;
+  }
+
   .dashboard-headline h2,
   .console-telemetry-title h2,
   .console-section-header h2,
   .section-header h2 {
-    @apply m-0 font-serif tracking-normal text-slate-950;
+    @apply m-0 text-base font-semibold tracking-normal text-slate-950;
   }
 
   .brand-block h1 {
@@ -165,12 +168,64 @@
     @apply flex flex-1 flex-col overflow-y-auto px-4 py-4;
   }
 
+  @media (max-width: 767px) {
+    .app-frame,
+    .chat-app-shell {
+      @apply flex-col;
+    }
+
+    .shell-sidebar {
+      @apply h-auto max-h-44 w-full border-b border-r-0;
+    }
+
+    .shell-sidebar-surface {
+      @apply gap-2 overflow-x-auto overflow-y-hidden p-3;
+    }
+
+    .shell-sidebar-brand {
+      @apply flex-row items-center justify-between gap-3;
+    }
+
+    .shell-sidebar-brand .section-badge,
+    .shell-sidebar-note,
+    .brand-block h1,
+    .brand-block .eyebrow,
+    .shell-nav-section-title,
+    .shell-sidebar-usercard {
+      @apply hidden;
+    }
+
+    .brand-mark {
+      @apply size-8 text-base;
+    }
+
+    .shell-sidebar-navstack {
+      @apply flex-row gap-2 overflow-x-auto;
+    }
+
+    .shell-nav-section {
+      @apply shrink-0;
+    }
+
+    .shell-nav-list {
+      @apply flex-row gap-1;
+    }
+
+    .shell-nav-link {
+      @apply h-9 whitespace-nowrap px-2.5 py-0 text-xs;
+    }
+
+    .shell-page-panel {
+      @apply px-3 py-3;
+    }
+  }
+
   .chat-app-main {
     @apply flex flex-1 flex-col min-h-0 overflow-hidden p-0 px-0 py-0;
   }
 
   .surface-panel {
-    @apply rounded-lg bg-white p-4 shadow-sm;
+    @apply rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100;
   }
 
   .surface-row {
@@ -178,7 +233,7 @@
   }
 
   .data-table-shell {
-    @apply overflow-x-auto rounded-lg bg-white shadow-sm;
+    @apply overflow-x-auto rounded-lg bg-white shadow-sm ring-1 ring-slate-100;
   }
 
   .command-bar-shell {
@@ -199,7 +254,7 @@
   }
 
   .page-header-block {
-    @apply rounded-lg bg-white p-4 shadow-sm;
+    @apply rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100;
   }
 
   .page-header-copy,
@@ -258,7 +313,7 @@
   .admin-list-item,
   .console-feed-row,
   .console-info-row {
-    @apply rounded-lg bg-white p-4 shadow-sm;
+    @apply rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100;
   }
 
   .admin-list-item strong,
@@ -288,7 +343,7 @@
   }
 
   .console-telemetry-bar {
-    @apply rounded-lg bg-white p-4 shadow-sm;
+    @apply rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100;
   }
 
   .console-telemetry-stream {
@@ -326,11 +381,11 @@
   .console-support-panel,
   .audit-detail-panel,
   .settings-drawer {
-    @apply rounded-lg bg-white p-4 shadow-sm;
+    @apply rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-100;
   }
 
   .console-table {
-    @apply overflow-hidden rounded-lg bg-white shadow-sm;
+    @apply overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-slate-100;
   }
 
   .console-table-head,
@@ -413,7 +468,7 @@
 
   .audit-record-group-tab,
   .audit-record-item {
-    @apply rounded-md bg-white px-3 py-2 text-left shadow-sm transition hover:bg-blue-50/40;
+    @apply rounded-md bg-white px-3 py-2 text-left shadow-sm ring-1 ring-slate-100 transition hover:bg-blue-50/40;
   }
 
   .audit-record-group-tab.is-active,
@@ -593,7 +648,7 @@
   }
 
   .visualization-hero h1 {
-    @apply m-0 font-serif text-3xl text-slate-950;
+    @apply m-0 text-2xl font-semibold text-slate-950;
   }
 
   .visualization-hero-status,
@@ -614,7 +669,7 @@
 
   .visualization-panel-heading h2,
   .visualization-panel-heading h3 {
-    @apply m-0 font-serif text-xl text-slate-950;
+    @apply m-0 text-base font-semibold text-slate-950;
   }
 
   .visualization-empty {
@@ -743,7 +798,7 @@
   .settings-main-copy h2,
   .thread-sidebar-copy h2,
   .chat-header-main h2 {
-    @apply m-0 font-serif text-xl text-slate-950;
+    @apply m-0 text-base font-semibold text-slate-950;
   }
 
   .settings-sidebar-header span,
@@ -1031,7 +1086,7 @@
   }
 
   .message-avatar-agent {
-    @apply bg-[#0052FF] font-serif text-white;
+    @apply bg-[#0052FF] font-semibold text-white;
   }
 
   .message-avatar-toolchain {
@@ -1221,7 +1276,7 @@
   }
 
   .composer-send-button {
-    @apply size-8 shrink-0 rounded-md bg-[#0052FF] text-white shadow-none transition hover:-translate-y-0.5 hover:bg-[#0047DB];
+    @apply size-8 shrink-0 rounded-md bg-[#0052FF] text-white shadow-none transition hover:bg-[#0047DB];
   }
 
   .streaming-indicator {

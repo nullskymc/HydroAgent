@@ -705,7 +705,7 @@ export function ChatPanel({
                 if (isUser) {
                   return (
                     <article key={message.localId} className="flex justify-end">
-                      <div className="max-w-[76%] rounded-2xl bg-slate-100 px-4 py-2.5 text-base leading-7 text-slate-900">
+                      <div className="max-w-[76%] rounded-lg border-l-2 border-l-[#0052FF] bg-blue-50/60 px-3 py-2 text-sm leading-6 text-slate-900">
                         <p className="m-0 whitespace-pre-wrap">{message.content}</p>
                       </div>
                     </article>
@@ -728,7 +728,7 @@ export function ChatPanel({
                         <time dateTime={message.created_at || undefined}>{formatMessageTimestamp(message.created_at)}</time>
                       </div>
 
-                      <div className="min-w-0 text-base leading-7 text-slate-900">
+                      <div className="min-w-0 text-sm leading-6 text-slate-900">
                         {message.plan ? renderPlan(message.plan) : null}
                         {message.suggestion ? renderSuggestion(message.suggestion) : null}
                         {message.toolTrace ? <ToolTraceCard trace={message.toolTrace} /> : null}
@@ -791,7 +791,7 @@ export function ChatPanel({
 
         <div className="shrink-0 w-full bg-gradient-to-t from-white via-white to-transparent pt-6 pb-8 px-4">
           <div className="mx-auto w-full max-w-[1360px] px-1 sm:px-4 lg:px-6">
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm transition focus-within:border-slate-300 focus-within:shadow-md">
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm transition focus-within:border-[#0052FF]/40 focus-within:ring-2 focus-within:ring-[#0052FF]/10">
               <select
                 aria-label="选择 HydroAgent 模式"
                 value={chatMode}
@@ -834,7 +834,7 @@ export function ChatPanel({
                     void submitMessage()
                   }
                 }}
-                className="min-h-8 flex-1 bg-transparent px-1 text-base text-slate-900 outline-none ring-0 placeholder:text-slate-400"
+                className="min-h-8 flex-1 bg-transparent px-1 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400"
                 placeholder="给 HydroAgent 发送消息..."
               />
               <Button

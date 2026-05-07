@@ -173,7 +173,7 @@ function ZoneStatusList({ rows, loading }: { rows: ZoneView[]; loading: boolean 
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
         <div>
           <SectionBadge label="Zone Status" />
-          <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">分区状态</h2>
+          <h2 className="m-0 mt-3 text-base font-semibold text-slate-950">分区状态</h2>
         </div>
         <InlineStatusDot active={loading} label={loading ? '同步中' : `${rows.length} 个分区`} />
       </div>
@@ -258,7 +258,7 @@ function PlanGenerationForm({
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <SectionBadge label="Plan Generator" />
-          <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">生成灌溉计划</h2>
+          <h2 className="m-0 mt-3 text-base font-semibold text-slate-950">生成灌溉计划</h2>
         </div>
         {mutation.isPending ? <InlineStatusDot active label="生成中" /> : null}
       </div>
@@ -297,7 +297,7 @@ function PlanGenerationForm({
 
         <Button
           type="submit"
-          className="h-9 bg-gradient-to-r from-[#0052FF] to-[#4D7CFF] text-sm text-white shadow-sm shadow-blue-500/20 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/25"
+          className="h-9 bg-[#0052FF] text-sm text-white shadow-sm shadow-blue-500/10 hover:bg-[#0047DB]"
           disabled={!canCreate || mutation.isPending || !selectedZoneId}
         >
           {mutation.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />}
@@ -328,7 +328,7 @@ function PlanActionButtons({
       <div className="flex items-center justify-end gap-1">
         <button
           type="button"
-          className="inline-flex size-7 items-center justify-center rounded-md bg-emerald-50 text-emerald-700 transition hover:-translate-y-0.5 hover:bg-emerald-100 disabled:opacity-50"
+          className="inline-flex size-7 items-center justify-center rounded-md bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
           disabled={mutation.isPending}
           onClick={() => mutation.mutate({ planId: plan.plan_id, action: 'approve' })}
           aria-label="批准计划"
@@ -337,7 +337,7 @@ function PlanActionButtons({
         </button>
         <button
           type="button"
-          className="inline-flex size-7 items-center justify-center rounded-md bg-red-50 text-red-700 transition hover:-translate-y-0.5 hover:bg-red-100 disabled:opacity-50"
+          className="inline-flex size-7 items-center justify-center rounded-md bg-red-50 text-red-700 transition hover:bg-red-100 disabled:opacity-50"
           disabled={mutation.isPending}
           onClick={() => mutation.mutate({ planId: plan.plan_id, action: 'reject' })}
           aria-label="拒绝计划"
@@ -352,7 +352,7 @@ function PlanActionButtons({
     return (
       <button
         type="button"
-        className="inline-flex h-7 items-center justify-center gap-1 rounded-md bg-blue-50 px-2 text-xs font-semibold text-[#0052FF] transition hover:-translate-y-0.5 hover:bg-blue-100 disabled:opacity-50"
+        className="inline-flex h-7 items-center justify-center gap-1 rounded-md bg-blue-50 px-2 text-xs font-semibold text-[#0052FF] transition hover:bg-blue-100 disabled:opacity-50"
         disabled={mutation.isPending}
         onClick={() => mutation.mutate({ planId: plan.plan_id, action: 'execute' })}
       >
@@ -381,7 +381,7 @@ function ActivePlanList({
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <SectionBadge label="Active Plans" />
-          <h2 className="m-0 mt-3 font-serif text-xl text-slate-950">活跃计划</h2>
+          <h2 className="m-0 mt-3 text-base font-semibold text-slate-950">活跃计划</h2>
         </div>
         <InlineStatusDot active={loading} label={loading ? '同步中' : `${plans.length} 条`} />
       </div>
