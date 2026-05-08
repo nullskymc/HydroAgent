@@ -361,7 +361,7 @@ export function SettingsForm({
             />
             <ReadonlyItem
               label="聊天 API Key 状态"
-              path="openai_api_key_encrypted"
+              path="openai_api_key"
               value={formatSecretStatusLabel(settings.openai_api_key_status?.configured, settings.openai_api_key_status?.masked_value)}
               detail="密钥由服务端 config.yaml 管理，不在前端传输。"
             />
@@ -406,7 +406,7 @@ export function SettingsForm({
             />
             <ReadonlyItem
               label="Embeddings Key 状态"
-              path="embedding_api_key_encrypted"
+              path="embedding_api_key"
               value={formatSecretStatusLabel(settings.embedding_api_key_status?.configured, settings.embedding_api_key_status?.masked_value)}
               detail="由服务端 config.yaml 管理；未单独配置时，后端回退到聊天 API Key。"
             />

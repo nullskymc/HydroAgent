@@ -3,11 +3,10 @@
 """
 import os
 import tempfile
-import warnings
 import yaml
 from dotenv import load_dotenv
 
-from src.security import decrypt_config_secret, encrypt_config_secret, mask_secret
+from src.security import mask_secret
 
 class Config:
     """
@@ -86,7 +85,6 @@ class Config:
         self.OPENAI_API_KEY = self._resolve_secret(
             env_key='OPENAI_API_KEY',
             yaml_key='openai_api_key',
-            encrypted_yaml_key='openai_api_key_encrypted',
         )
         self.OPENAI_BASE_URL = (
             self._config_from_yaml.get('openai_base_url')
@@ -95,7 +93,6 @@ class Config:
         self.EMBEDDING_API_KEY = self._resolve_secret(
             env_key='EMBEDDING_API_KEY',
             yaml_key='embedding_api_key',
-            encrypted_yaml_key='embedding_api_key_encrypted',
             fallback=self.OPENAI_API_KEY,
         )
         self.LEGACY_KNOWLEDGE_TOP_K = int(self._get_from_yaml('knowledge_base.top_k', 4))
@@ -139,7 +136,7 @@ class Config:
                 return default
         return value
 
-    def _resolve_secret(self, *, env_key, yaml_key, encrypted_yaml_key, fallback=None):
+    def _resolve_secret(self, *, env_key, yaml_key, fallback=None):
         env_value = os.getenv(env_key)
         if env_value:
             return env_value
@@ -147,18 +144,6 @@ class Config:
         plain_value = self._config_from_yaml.get(yaml_key)
         if plain_value:
             return plain_value
-
-        encrypted_value = self._config_from_yaml.get(encrypted_yaml_key)
-        if encrypted_value:
-            try:
-                return decrypt_config_secret(encrypted_value)
-            except ValueError as exc:
-                warnings.warn(
-                    f"{encrypted_yaml_key} 无法使用当前配置密钥解密，将忽略该加密值；"
-                    f"可设置 {env_key} 或 HYDRO_CONFIG_SECRET 恢复密钥。",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
 
         return fallback
 
@@ -248,14 +233,12 @@ class Config:
             updates=updates,
             runtime_attr="OPENAI_API_KEY",
             plain_yaml_key="openai_api_key",
-            encrypted_yaml_key="openai_api_key_encrypted",
             update_key="openai_api_key",
         )
         self._update_secret_in_yaml(
             updates=updates,
             runtime_attr="EMBEDDING_API_KEY",
             plain_yaml_key="embedding_api_key",
-            encrypted_yaml_key="embedding_api_key_encrypted",
             update_key="embedding_api_key",
             fallback_attr="OPENAI_API_KEY",
         )
@@ -281,7 +264,6 @@ class Config:
         updates,
         runtime_attr,
         plain_yaml_key,
-        encrypted_yaml_key,
         update_key,
         fallback_attr=None,
     ):
@@ -292,13 +274,11 @@ class Config:
         normalized = str(raw_value or "").strip()
         if not normalized:
             self._delete_in_yaml(plain_yaml_key)
-            self._delete_in_yaml(encrypted_yaml_key)
             fallback_value = getattr(self, fallback_attr) if fallback_attr else None
             setattr(self, runtime_attr, fallback_value)
             return
 
-        self._delete_in_yaml(plain_yaml_key)
-        self._set_in_yaml(encrypted_yaml_key, encrypt_config_secret(normalized))
+        self._set_in_yaml(plain_yaml_key, normalized)
         setattr(self, runtime_attr, normalized)
     
     def get_db_uri(self):

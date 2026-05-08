@@ -105,7 +105,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.get_db_uri(), expected_uri)
 
     def test_secret_settings_are_masked_in_runtime_snapshot(self):
-        """测试敏感配置仅以掩码状态暴露给前端。"""
+        """测试敏感配置仅以掩码状态暴露给前端，YAML 中存明文。"""
         config = Config(config_file_path=self.config_file.name)
         config.update_runtime_settings({
             "openai_api_key": "sk-secret-demo",
@@ -117,6 +117,11 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(runtime["embedding_api_key_status"]["configured"])
         self.assertNotIn("sk-secret-demo", str(runtime))
         self.assertNotIn("sk-embed-demo", str(runtime))
+
+        # 验证 YAML 中存的是明文 key，而非加密字段
+        self.assertIn("openai_api_key", config._config_from_yaml)
+        self.assertNotIn("openai_api_key_encrypted", config._config_from_yaml)
+        self.assertEqual(config._config_from_yaml["openai_api_key"], "sk-secret-demo")
 
     def test_yaml_managed_model_settings_override_custom_env(self):
         """YAML 托管的模型配置应优先于同名环境变量。"""

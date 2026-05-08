@@ -94,11 +94,10 @@ apis:
 - `apis.weather_service_url`：天气预报服务地址。
 - `database`：数据库配置；未配置时使用本地 SQLite。
 
-生产或多人环境建议通过环境变量管理敏感信息：
+生产或多人环境建议在 `config.yaml` 中直接配置 API Key，也可通过环境变量覆盖：
 
 ```bash
-export OPENAI_API_KEY="sk-xxx"
-export HYDRO_CONFIG_SECRET="change-this-secret"
+export OPENAI_API_KEY="sk-xxx"           # 覆盖 config.yaml 中的 openai_api_key
 export HYDROAUTH_SECRET="change-this-auth-secret"
 ```
 
@@ -171,12 +170,11 @@ docker compose up --build
 - 后端：`http://localhost:7860`
 - 前端：`http://localhost:3000`
 
-如需调整前端允许来源、认证密钥或配置加密密钥，可通过环境变量传入：
+如需调整前端允许来源、认证密钥，可通过环境变量传入：
 
 ```bash
 FRONTEND_ORIGINS=http://localhost:3000 \
 HYDROAUTH_SECRET=change-this-auth-secret \
-HYDRO_CONFIG_SECRET=change-this-config-secret \
 docker compose up --build
 ```
 
