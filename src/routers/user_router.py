@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from src.config import config
 from src.database.models import AuditEvent, User, get_db
 from src.security import hash_password
 from src.services.auth_service import get_current_user, record_audit_event, require_permission, serialize_user_profile
@@ -50,6 +51,8 @@ def create_user(
 ):
     if "users:manage" not in serialize_user_profile(db, current_user)["permissions"]:
         raise HTTPException(status_code=403, detail="缺少权限: users:manage")
+    if config.DEMO_MODE:
+        raise HTTPException(status_code=403, detail="演示模式禁止创建新用户")
     if db.query(User).filter(User.username == req.username).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
 

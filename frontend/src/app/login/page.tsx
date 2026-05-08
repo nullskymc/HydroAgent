@@ -14,7 +14,7 @@ export default async function LoginPage() {
         <div className="login-copy">
           <p className="eyebrow">HydroAgent</p>
           <h1>Secure Console</h1>
-          <p>默认演示账号：admin / admin123。也可使用 manager、operator、viewer、auditor 对应角色账号。</p>
+          <p>演示环境仅开放唯一管理员账号 admin / admin123</p>
         </div>
         <LoginForm />
       </section>

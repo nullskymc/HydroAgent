@@ -4,6 +4,9 @@ Authentication and audit service for HydroAgent admin console.
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import secrets
+import string
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException
@@ -13,6 +16,8 @@ from src.database.models import AuditEvent, User, get_db
 from src.security import check_password, create_access_token, decode_access_token, hash_password
 from src.services.rbac_service import ensure_rbac_seed, get_user_permission_keys, get_user_roles, set_user_roles, user_has_permission
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_USERS = [
     ("admin", "admin123", ["admin"], "系统管理员"),
     ("manager", "manager123", ["manager"], "运营经理"),
@@ -20,6 +25,11 @@ DEFAULT_USERS = [
     ("viewer", "viewer123", ["viewer"], "只读观察员"),
     ("auditor", "auditor123", ["auditor"], "审计员"),
 ]
+
+
+def _generate_password(length: int = 16) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
 def record_audit_event(
@@ -51,6 +61,32 @@ def record_audit_event(
 def ensure_auth_seed(db: Session):
     ensure_rbac_seed(db)
     if db.query(User).count() > 0:
+        return
+
+    from src.config import config
+
+    if config.DEMO_MODE:
+        password = _generate_password()
+        user = User(
+            username="admin",
+            password_hash=hash_password(password),
+            email="admin@hydro.local",
+            display_name="系统管理员",
+            is_active=True,
+            created_by="system",
+            password_changed_at=dt.datetime.utcnow(),
+        )
+        db.add(user)
+        db.flush()
+        set_user_roles(db, user, ["admin"], assigned_by="system")
+        db.commit()
+
+        logger.info("=" * 60)
+        logger.info("🔐 演示模式已启动 —— 唯一管理员账号：")
+        logger.info(f"       用户名: admin")
+        logger.info(f"       密码:   {password}")
+        logger.info("       请立即保存此密码，容器重启后不会再次输出。")
+        logger.info("=" * 60)
         return
 
     for username, password, role_keys, display_name in DEFAULT_USERS:

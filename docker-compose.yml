@@ -16,6 +16,7 @@ services:
       - FRONTEND_ORIGINS=${FRONTEND_ORIGINS:-http://localhost:3000}
       - HYDROAUTH_SECRET=${HYDROAUTH_SECRET:-change-me-in-production}
       - HYDRO_CONFIG_SECRET=${HYDRO_CONFIG_SECRET:-change-me-in-production}
+      - DEMO_MODE=${DEMO_MODE:-true}
     volumes:
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml

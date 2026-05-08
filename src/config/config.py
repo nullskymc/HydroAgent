@@ -119,6 +119,9 @@ class Config:
             os.path.dirname(os.path.abspath(__file__)), '../mcp_server.py'
         )
         self.sync_yaml_to_environment()
+
+        # 演示模式：禁止注册新用户，仅保留唯一管理员账号
+        self.DEMO_MODE = os.getenv('DEMO_MODE', '').strip().lower() == 'true'
     
     def _get_from_yaml(self, path, default=None):
         """
