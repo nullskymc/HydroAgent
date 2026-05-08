@@ -16,7 +16,7 @@ from src.database.models import AuditEvent, User, get_db
 from src.security import check_password, create_access_token, decode_access_token, hash_password
 from src.services.rbac_service import ensure_rbac_seed, get_user_permission_keys, get_user_roles, set_user_roles, user_has_permission
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hydroagent.auth")
 
 DEFAULT_USERS = [
     ("admin", "admin123", ["admin"], "系统管理员"),

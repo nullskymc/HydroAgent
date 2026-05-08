@@ -5,45 +5,37 @@ import logging
 import os
 from src.config import config
 
-def setup_logger(name="IrrigationSystem"):
+def setup_logger():
     """
-    配置并返回一个日志记录器实例
-    
-    :param name: 日志记录器名称
-    :return: Logger对象
+    配置根日志记录器，所有子 logger 通过传播自动继承 handler。
     """
     # 确保日志文件目录存在
     log_path = os.path.dirname(config.LOG_FILE)
     if log_path and not os.path.exists(log_path):
         os.makedirs(log_path)
-    
-    # 设置日志格式
+
     log_format = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
-    # 获取日志级别
+
     log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
-    
-    # 配置日志记录器
-    logger = logging.getLogger(name)
-    logger.setLevel(log_level)
-    
-    # 清除已存在的处理器
-    if logger.handlers:
-        logger.handlers.clear()
-    
-    # 添加文件处理器
+
+    root = logging.getLogger()
+    root.setLevel(log_level)
+
+    # 避免重复添加
+    if root.handlers:
+        root.handlers.clear()
+
     file_handler = logging.FileHandler(config.LOG_FILE)
     file_handler.setFormatter(log_format)
-    logger.addHandler(file_handler)
-    
-    # 添加控制台处理器
+    root.addHandler(file_handler)
+
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(log_format)
-    logger.addHandler(console_handler)
-    
-    return logger
+    root.addHandler(console_handler)
 
-# 全局日志记录器实例
+    return root
+
+# 全局日志记录器实例（根 logger）
 logger = setup_logger()
