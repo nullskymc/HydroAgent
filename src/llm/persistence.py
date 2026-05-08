@@ -93,7 +93,11 @@ def _message_to_payload(message: BaseMessage) -> dict[str, Any] | None:
     if isinstance(message, HumanMessage):
         return {"role": "user", "content": _safe_text(message.content)}
     if isinstance(message, AIMessage):
-        return {"role": "assistant", "content": _safe_text(message.content)}
+        payload: dict[str, Any] = {"role": "assistant", "content": _safe_text(message.content)}
+        rc = message.additional_kwargs.get("reasoning_content")
+        if rc and isinstance(rc, str):
+            payload["reasoning_content"] = rc
+        return payload
     return None
 
 

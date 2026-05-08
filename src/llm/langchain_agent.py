@@ -29,11 +29,51 @@ _PLAN_ID_PATTERN = re.compile(r"\bplan_[a-zA-Z0-9]+\b")
 
 
 class HydroChatOpenAI(ChatOpenAI):
-    """ChatOpenAI variant that keeps tool message content OpenAI-compatible."""
+    """ChatOpenAI variant that preserves DeepSeek reasoning_content across turns."""
 
     async def _astream(self, messages: list[Any], *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         async for chunk in super()._astream(_sanitize_chat_messages(messages), *args, **kwargs):
             yield chunk
+
+    def _convert_chunk_to_generation_chunk(
+        self,
+        chunk: dict,
+        default_chunk_class: type,
+        base_generation_info: dict | None,
+    ):
+        generation_chunk = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info
+        )
+        if generation_chunk is not None:
+            choices = chunk.get("choices", []) or chunk.get("chunk", {}).get("choices", [])
+            if choices:
+                delta = choices[0].get("delta") or {}
+                rc = delta.get("reasoning_content")
+                if rc and isinstance(rc, str):
+                    generation_chunk.message.additional_kwargs["reasoning_content"] = rc
+        return generation_chunk
+
+    def _create_chat_result(self, response, generation_info=None):
+        result = super()._create_chat_result(response, generation_info)
+        response_dict = response if isinstance(response, dict) else response.model_dump()
+        choices = response_dict.get("choices", [])
+        for i, choice in enumerate(choices):
+            msg = choice.get("message", {})
+            rc = msg.get("reasoning_content")
+            if rc and isinstance(rc, str) and i < len(result.generations):
+                result.generations[i].message.additional_kwargs["reasoning_content"] = rc
+        return result
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if "messages" in payload:
+            msgs = self._convert_input(input_).to_messages()
+            for msg, msg_dict in zip(msgs, payload["messages"]):
+                if msg_dict.get("role") == "assistant":
+                    rc = msg.additional_kwargs.get("reasoning_content")
+                    if isinstance(rc, str) and rc.strip():
+                        msg_dict["reasoning_content"] = rc
+        return payload
 
 
 class HydroDeepAgent:
@@ -112,7 +152,9 @@ class HydroDeepAgent:
             role = message.get("role", "user")
             content = message.get("content", "")
             if role == "assistant":
-                lc_messages.append(AIMessage(content=content))
+                rc = message.get("reasoning_content")
+                additional_kwargs = {"reasoning_content": rc} if rc and isinstance(rc, str) else {}
+                lc_messages.append(AIMessage(content=content, additional_kwargs=additional_kwargs))
             else:
                 lc_messages.append(HumanMessage(content=content))
 
