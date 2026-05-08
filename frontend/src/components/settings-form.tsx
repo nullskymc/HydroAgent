@@ -150,8 +150,6 @@ export function SettingsForm({
   initialSection: SettingsSectionId
 }) {
   const [settings, setSettings] = useState(initialSettings)
-  const [openAiApiKeyInput, setOpenAiApiKeyInput] = useState('')
-  const [embeddingApiKeyInput, setEmbeddingApiKeyInput] = useState('')
   const [modelDrawerTarget, setModelDrawerTarget] = useState<'chat' | 'embedding' | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [skillMessage, setSkillMessage] = useState<string | null>(null)
@@ -185,8 +183,6 @@ export function SettingsForm({
           default_duration_minutes: settings.default_duration_minutes,
           alarm_threshold: settings.alarm_threshold,
           alarm_enabled: settings.alarm_enabled,
-          ...(openAiApiKeyInput.trim() ? { openai_api_key: openAiApiKeyInput.trim() } : {}),
-          ...(embeddingApiKeyInput.trim() ? { embedding_api_key: embeddingApiKeyInput.trim() } : {}),
         }),
       })
 
@@ -197,8 +193,6 @@ export function SettingsForm({
 
       const payload = await response.json()
       setSettings(payload.settings)
-      setOpenAiApiKeyInput('')
-      setEmbeddingApiKeyInput('')
       setMessage(
         payload.agent_reload_error
           ? `配置已保存，但 AI 引擎热重载失败：${payload.agent_reload_error}`
@@ -369,21 +363,7 @@ export function SettingsForm({
               label="聊天 API Key 状态"
               path="openai_api_key_encrypted"
               value={formatSecretStatusLabel(settings.openai_api_key_status?.configured, settings.openai_api_key_status?.masked_value)}
-              detail="只返回掩码状态，明文不会回传前端。"
-            />
-            <SettingsItem
-              label="覆盖聊天 API Key"
-              path="openai_api_key"
-              detail="留空表示不修改；保存时仅单向写入后端加密配置。"
-              control={
-                <Input
-                  className={compactInputClass}
-                  type="password"
-                  value={openAiApiKeyInput}
-                  onChange={(event) => setOpenAiApiKeyInput(event.target.value)}
-                  placeholder="输入新的 API Key"
-                />
-              }
+              detail="密钥由服务端 config.yaml 管理，不在前端传输。"
             />
             <SettingsItem
               label="采集周期"
@@ -428,21 +408,7 @@ export function SettingsForm({
               label="Embeddings Key 状态"
               path="embedding_api_key_encrypted"
               value={formatSecretStatusLabel(settings.embedding_api_key_status?.configured, settings.embedding_api_key_status?.masked_value)}
-              detail="未单独配置时，后端会回退到聊天 API Key。"
-            />
-            <SettingsItem
-              label="覆盖 Embeddings Key"
-              path="embedding_api_key"
-              detail="留空表示继续沿用当前配置；保存时只写入密文。"
-              control={
-                <Input
-                  className={compactInputClass}
-                  type="password"
-                  value={embeddingApiKeyInput}
-                  onChange={(event) => setEmbeddingApiKeyInput(event.target.value)}
-                  placeholder="输入新的 Embeddings Key"
-                />
-              }
+              detail="由服务端 config.yaml 管理；未单独配置时，后端回退到聊天 API Key。"
             />
             <SettingsItem
               label="默认召回条数"

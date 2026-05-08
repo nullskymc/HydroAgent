@@ -1,6 +1,6 @@
 services:
   backend:
-    image: registry.cn-hangzhou.aliyuncs.com/nullskymc/smart-irrigation:latest
+    image: ghcr.io/nullskymc/smart-irrigation-backend:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -21,6 +21,7 @@ services:
       - ./config.yaml:/app/config.yaml
 
   frontend:
+    image: ghcr.io/nullskymc/smart-irrigation-frontend:latest
     build:
       context: .
       dockerfile: frontend/Dockerfile
