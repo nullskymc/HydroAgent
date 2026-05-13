@@ -17,7 +17,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.config import config
-from src.data.data_collection import DataCollectionModule
+from src.data.data_collection import DataCollectionModule, sync_mock_moisture
 from src.data.data_processing import DataProcessingModule
 from src.database.models import (
     Actuator,
@@ -1049,53 +1049,26 @@ def _collect_zone_sensor_summary(db: Session, zone: Zone) -> dict[str, Any]:
 
 
 def _stabilize_running_mock_reading(db: Session, zone: Zone, sensor_id: str, reading: dict[str, Any]) -> None:
+    """灌溉期间湿度线性上升，并同步回模拟状态，确保灌溉停止后从当前值继续线性下降"""
     running_plan = _get_running_plan_for_zone(db, zone.zone_id)
     if not running_plan:
         return
 
-    threshold = _resolve_zone_threshold(db, zone)
-    base_moisture = _coerce_float(_plan_evidence_moisture(running_plan))
-    if base_moisture is None:
-        base_moisture = _coerce_float(_latest_sensor_moisture(db, sensor_id))
-    if base_moisture is None:
-        base_moisture = _coerce_float(reading.get("soil_moisture"))
-    if base_moisture is None:
+    current = float(reading.get("soil_moisture", 0) or 0)
+    if current <= 0:
         return
 
-    base_moisture = min(max(0.0, base_moisture), max(0.0, threshold - 0.5))
-    elapsed_seconds = _elapsed_execution_seconds(running_plan, now=dt.datetime.utcnow())
-    protection_seconds = max(1.0, _moisture_stop_protection_seconds(running_plan))
-    progress = min(1.0, elapsed_seconds / protection_seconds)
-    target_moisture = threshold + 0.5
-    stable_moisture = base_moisture + (target_moisture - base_moisture) * progress
-    if progress < 1.0:
-        stable_moisture = min(stable_moisture, max(0.0, threshold - 0.1))
+    threshold = _resolve_zone_threshold(db, zone)
+    elapsed = _elapsed_execution_seconds(running_plan, now=dt.datetime.utcnow())
+    protection = max(1.0, _moisture_stop_protection_seconds(running_plan))
+    progress = min(1.0, elapsed / protection)
 
-    reading["soil_moisture"] = round(min(100.0, max(0.0, stable_moisture)), 2)
+    target = threshold + 3.0
+    new_moisture = current + (target - current) * progress
+    new_moisture = min(100.0, new_moisture)
 
-
-def _plan_evidence_moisture(plan: IrrigationPlan) -> Any:
-    evidence = plan.evidence_summary if isinstance(plan.evidence_summary, dict) else {}
-    sensor_summary = evidence.get("sensor_summary") if isinstance(evidence.get("sensor_summary"), dict) else {}
-    average = sensor_summary.get("average") if isinstance(sensor_summary.get("average"), dict) else {}
-    return average.get("soil_moisture")
-
-
-def _latest_sensor_moisture(db: Session, sensor_id: str) -> Any:
-    latest = (
-        db.query(SensorData)
-        .filter(SensorData.sensor_id == sensor_id, SensorData.soil_moisture.isnot(None))
-        .order_by(SensorData.timestamp.desc())
-        .first()
-    )
-    return latest.soil_moisture if latest else None
-
-
-def _coerce_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    reading["soil_moisture"] = round(new_moisture, 2)
+    sync_mock_moisture(new_moisture)
 
 
 def _store_sensor_history(db: Session, raw_readings: list[dict[str, Any]]) -> None:

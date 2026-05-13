@@ -579,13 +579,9 @@ class UserInterfaceModule:
             
             # 如果没有足够的数据，生成一些模拟数据用于显示
             if len(self.data_history["timestamp"]) < 2:
-                # 生成一些模拟数据用于初始显示
                 now = datetime.datetime.now()
                 timestamps = [(now - datetime.timedelta(hours=i)).strftime('%H:%M') for i in range(24, 0, -1)]
-                # 模拟一些波动的湿度数据
-                base_moisture = 50 + np.random.normal(0, 5, 24)
-                # 确保湿度在合理范围内
-                moistures = np.clip(base_moisture, 0, 100)
+                moistures = np.linspace(90, 15, 24)  # 24h 线性下降，90→15
                 
                 fig, ax = plt.subplots(figsize=(10, 6))
                 ax.plot(timestamps, moistures, marker='o', linestyle='-', color='#2980b9')
@@ -639,10 +635,9 @@ class UserInterfaceModule:
                 now = datetime.datetime.now()
                 timestamps = [(now - datetime.timedelta(hours=i)).strftime('%H:%M') for i in range(12, 0, -1)]
                 
-                # 模拟几种不同的传感器数据
-                moisture_data = np.clip(50 + np.random.normal(0, 8, 12), 0, 100)  # 湿度数据
-                temp_data = 20 + np.random.normal(0, 3, 12)  # 温度数据
-                light_data = np.clip(5000 + np.random.normal(0, 1000, 12), 0, 10000)  # 光照数据
+                moisture_data = np.linspace(90, 30, 12)  # 半天 90→30
+                temp_data = np.full(12, 25.0)  # 温度稳定
+                light_data = np.full(12, 500.0) * 10  # 光照稳定（缩放前）
                 light_data_scaled = light_data / 100  # 缩放光照数据以便在同一图表显示
                 
                 fig, ax1 = plt.subplots(figsize=(10, 6))
